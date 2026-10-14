@@ -1,5 +1,6 @@
 'use strict';
 process.env.NODE_ENV = 'test';
+process.env.DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'msa-api-'));
 process.env.ADMIN_USER = 'admin';
 process.env.ADMIN_PASSWORD = 'test-password-123';
 const test = require('node:test');
@@ -80,6 +81,10 @@ test('full crawl through the API: progress, filtered lists, details and complete
     if (count) assert.equal(n, count, name + ' rows');
   }
   assert.equal((await call(`/api/crawls/${id}/export/unknown.csv`)).status, 404);
+  // Results are on disk, so a different server process (fresh cache) sees the same crawl
+  const other = require('../lib/store').createStore(process.env.DATA_DIR).get(id);
+  assert.equal(other.progress().pagesCrawled, 152);
+  assert.equal(other.analysis().pages.length, 152);
   assert.equal((await call('/api/crawls/' + 'f'.repeat(24))).status, 404);
 });
 

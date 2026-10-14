@@ -6,6 +6,7 @@ const { Crawl } = require('./lib/crawler');
 const { parseUserUrl, preflight, UrlError } = require('./lib/safeUrl');
 const { exportCsv } = require('./lib/csv');
 const { queryList } = require('./lib/lists');
+const { createStore, pickDir } = require('./lib/store');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
@@ -63,21 +64,18 @@ app.use((req, res, next) => {
 app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 app.use(express.json({ limit: '2kb' }));
 
-// ---- Temporary in-memory storage (cleared on restart) ----
-const crawls = new Map();
-const isBusy = () => [...crawls.values()].some(c => ['queued', 'running', 'cancelling'].includes(c.status));
-function evict() {
-  const finished = [...crawls.values()].filter(c => c.finishedAt).sort((a, b) => a.finishedAt - b.finishedAt);
-  for (const c of finished) if (Date.now() - c.finishedAt > TTL_MS) crawls.delete(c.id);
-  const left = finished.filter(c => crawls.has(c.id));
-  while (left.length >= MAX_STORED) crawls.delete(left.shift().id);
-}
-setInterval(() => { evict(); for (const [ip, f] of failures) if (Date.now() > f.reset) failures.delete(ip); }, 60000).unref();
+// ---- Storage: crawls are saved to disk so every server process (and a restart) can read them ----
+const store = createStore(pickDir());
+const live = new Map(); // crawls running inside THIS process
+setInterval(() => {
+  try { store.evict(TTL_MS, MAX_STORED); } catch (e) { console.error('Cleanup failed:', e.message); }
+  for (const [ip, f] of failures) if (Date.now() > f.reset) failures.delete(ip);
+}, 60000).unref();
 
 function find(req, res, next) {
-  const c = /^[a-f0-9]{24}$/.test(req.params.id) && crawls.get(req.params.id);
-  if (!c) return res.status(404).json({ error: 'Crawl not found. Results are only kept temporarily.' });
-  req.crawl = c;
+  const view = store.get(req.params.id);
+  if (!view) return res.status(404).json({ error: 'Crawl not found. It may have expired: results are only kept for a limited time.' });
+  req.view = view;
   next();
 }
 
@@ -86,7 +84,7 @@ app.get('/api/status', (req, res) => res.json({ live: true, defaultLimit: DEFAUL
 
 app.post('/api/crawls', async (req, res, next) => {
   try {
-    if (isBusy()) return res.status(409).json({ error: 'A crawl is already running. Cancel it or wait for it to finish.' });
+    if (store.isBusy()) return res.status(409).json({ error: 'A crawl is already running. Cancel it or wait for it to finish.' });
     const body = req.body || {};
     let u;
     try { u = parseUserUrl(body.url); await preflight(u); }
@@ -94,30 +92,36 @@ app.post('/api/crawls', async (req, res, next) => {
     let limit = Number.parseInt(body.limit, 10);
     if (!Number.isFinite(limit)) limit = DEFAULT_LIMIT;
     limit = Math.min(MAX_LIMIT, Math.max(1, limit));
-    if (isBusy()) return res.status(409).json({ error: 'A crawl is already running.' });
-    evict();
-    const crawl = new Crawl(crypto.randomBytes(12).toString('hex'), u, limit, app.locals.crawlOptions);
-    crawls.set(crawl.id, crawl);
-    crawl.run().catch(e => console.error(e));
+    if (store.isBusy()) return res.status(409).json({ error: 'A crawl is already running.' });
+    store.evict(TTL_MS, MAX_STORED - 1);
+    const crawl = new Crawl(crypto.randomBytes(12).toString('hex'), u, limit, { ...app.locals.crawlOptions, store });
+    live.set(crawl.id, crawl);
+    crawl.run().catch(e => console.error(e)).finally(() => live.delete(crawl.id));
     res.status(201).json(crawl.progress());
   } catch (e) { next(e); }
 });
 
-app.get('/api/crawls/:id', find, (req, res) => res.json(req.crawl.progress()));
+app.get('/api/crawls/:id', find, (req, res) => res.json(req.view.progress()));
 
 // pages | issues | links | images, each with ?q= search, filters, ?sort=&dir= (pages), ?offset=&limit=
 app.get('/api/crawls/:id/:section(pages|issues|links|images)', find, (req, res) => {
-  res.json(queryList(req.params.section, req.crawl.analysis(), req.query));
+  res.json(queryList(req.params.section, req.view.analysis(), req.query));
 });
 
-app.post('/api/crawls/:id/cancel', find, (req, res) => { req.crawl.cancel(); res.json(req.crawl.progress()); });
+app.post('/api/crawls/:id/cancel', find, (req, res) => {
+  store.requestCancel(req.params.id); // works even if another server process is running the crawl
+  const c = live.get(req.params.id);
+  if (c) { c.cancel(); return res.json(c.progress()); }
+  const p = req.view.progress();
+  res.json(['queued', 'running'].includes(p.status) ? { ...p, status: 'cancelling' } : p);
+});
 
 // pages | issues | links | broken-links | images: always ALL records, never just the visible table rows
 app.get('/api/crawls/:id/export/:file', find, (req, res) => {
   const name = String(req.params.file).replace(/\.csv$/, '');
-  const csv = exportCsv(name, req.crawl.analysis(true));
+  const csv = exportCsv(name, req.view.analysis());
   if (csv === null) return res.status(404).json({ error: 'Unknown export' });
-  const site = req.crawl.site.replace(/[^a-z0-9.-]/gi, '');
+  const site = String(req.view.meta.site || 'site').replace(/[^a-z0-9.-]/gi, '');
   res.set({ 'Content-Type': 'text/csv; charset=utf-8',
     'Content-Disposition': `attachment; filename="modernise-${name}-${site}-${new Date().toISOString().slice(0, 10)}.csv"` });
   res.send(csv);

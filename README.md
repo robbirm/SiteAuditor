@@ -30,10 +30,17 @@ A page returning 4xx/5xx or failing to load scores 0. The site score is the aver
 UTF-8 with BOM and CRLF (opens correctly in Excel). Cells starting with `= + - @` are prefixed with `'` to prevent formula injection.
 
 ## Tests (`npm test`, Node's built-in runner, no network needed)
-`analysis` (SEO rules and score), `csv` (all five exports, all rows, injection), `safeUrl` (SSRF blocking), `crawler` (discovery, limit,
+`store` (disk storage, second-process reads, interruption, cleanup), `analysis` (SEO rules and score), `csv` (all five exports, all rows, injection), `safeUrl` (SSRF blocking), `crawler` (discovery, limit,
 2-request concurrency, cancellation, robots.txt), `site` (messy fixture website end to end), `api` (login, validation, progress, filters, exports, cancel, 409, limit clamp).
 
+## Storage (important on shared hosting)
+Hosts such as Hostinger/LiteSpeed can run several Node processes and restart them, so crawl results are saved to disk
+(`lib/store.js`), not kept in one process's memory. The process running a crawl appends results to `data/<id>/*.jsonl`
+and writes a heartbeat every second; any process can read them. Cancel works across processes (a flag file).
+If a process dies mid-crawl the crawl is shown as "interrupted" after ~20 s with the partial results.
+Folder: `DATA_DIR` env var, default `./data`, falling back to the system temp folder if that is not writable.
+
 ## Notes
-- Results are in memory only (last 5 crawls, 2 hours) and are lost on restart. One crawl at a time. Max 2 simultaneous requests.
+- Finished crawls are kept for 2 hours (last 5). One crawl at a time. Max 2 simultaneous requests.
 - The page limit counts every URL fetched; images, PDFs and similar files are never queued.
 - External links are listed but not checked. Links to URLs beyond the page limit show "Not crawled".

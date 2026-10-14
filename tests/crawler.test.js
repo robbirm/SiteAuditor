@@ -116,3 +116,19 @@ test('request failures are recorded, not fatal', async () => {
   assert.equal(boom.note, 'Timed out');
   assert.ok(c.analysis(true).issues.some(i => i.type === 'request_failed' && i.url === BASE + '/boom'));
 });
+
+test('a crawl saved through the disk store can be read back by another store (second process)', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const { createStore } = require('../lib/store');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'msa-crawl-'));
+  const site = fakeSite({ '/': okPage('/', { links: [['/a', 'A'], ['/gone', 'G']], imgs: [['/i.png']] }), '/a': okPage('/a') });
+  const c = mk(site, 10, { store: createStore(dir), id: undefined });
+  c.id = 'b'.repeat(24);
+  await c.run();
+  const v = createStore(dir).get(c.id);
+  assert.equal(v.meta.status, 'done');
+  assert.equal(v.analysis().pages.length, c.results.length);
+  assert.equal(v.analysis().summary.score, c.analysis(true).summary.score);
+  assert.equal(v.analysis().summary.totals.brokenLinks, 1);
+  assert.equal(v.analysis().images.length, 1);
+});
