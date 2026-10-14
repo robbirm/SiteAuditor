@@ -1,0 +1,17 @@
+{
+  "name": "modernise-site-auditor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private SEO crawler and audit dashboard for Modernise My Business",
+  "main": "server.js",
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file=.env server.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "express": "^4.21.2",
+    "robots-parser": "^3.0.1"
+  }
+}
