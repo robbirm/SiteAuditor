@@ -119,3 +119,56 @@ test('failed requests are critical and score 0', () => {
   assert.deepEqual(typesOf(a, U('/t')), ['request_failed']);
   assert.equal(a.summary.score, 0);
 });
+
+test('title and meta description length checks', () => {
+  const a = analyze([
+    row(U('/long'), { title: 'x'.repeat(61), metaDescription: 'y'.repeat(161) }),
+    row(U('/short'), { title: 'Short', metaDescription: 'Too short' }),
+    row(U('/edge'), { title: 'x'.repeat(60), metaDescription: 'y'.repeat(160) }),
+    row(U('/edge2'), { title: 'z'.repeat(30), metaDescription: 'w'.repeat(70) })
+  ]);
+  assert.deepEqual(typesOf(a, U('/long')), ['meta_description_too_long', 'title_too_long']);
+  assert.deepEqual(typesOf(a, U('/short')), ['meta_description_too_short', 'title_too_short']);
+  assert.deepEqual(typesOf(a, U('/edge')), []);
+  assert.deepEqual(typesOf(a, U('/edge2')), []);
+  assert.equal(sevOf(a, 'title_too_long'), 'warning');
+  assert.equal(sevOf(a, 'title_too_short'), 'info');
+});
+
+test('thin content, mobile viewport, language, slow response and HTTP pages', () => {
+  const a = analyze([
+    row(U('/thin'), { words: 120 }), row(U('/enough'), { words: 300 }),
+    row(U('/noviewport'), { viewport: false }), row(U('/nolang'), { lang: '' }),
+    row(U('/slow'), { responseMs: 1501 }), row(U('/fast'), { responseMs: 1500 }),
+    row('http://x.example.com/insecure')
+  ]);
+  assert.deepEqual(typesOf(a, U('/thin')), ['thin_content']);
+  assert.deepEqual(typesOf(a, U('/enough')), []);
+  assert.deepEqual(typesOf(a, U('/noviewport')), ['missing_viewport']);
+  assert.deepEqual(typesOf(a, U('/nolang')), ['missing_lang']);
+  assert.deepEqual(typesOf(a, U('/slow')), ['slow_response']);
+  assert.deepEqual(typesOf(a, U('/fast')), []);
+  assert.ok(typesOf(a, 'http://x.example.com/insecure').includes('insecure_page'));
+  assert.equal(sevOf(a, 'missing_viewport'), 'warning');
+  assert.equal(sevOf(a, 'thin_content'), 'info');
+});
+
+test('image file size and broken image checks', () => {
+  const kb = n => n * 1024;
+  const a = analyze([row(U('/p')), row(U('/q'))], [], [
+    { page: U('/p'), src: U('/small.png'), alt: 'a' }, { page: U('/p'), src: U('/big.jpg'), alt: 'b' },
+    { page: U('/p'), src: U('/exact.png'), alt: 'c' }, { page: U('/q'), src: U('/gone.png'), alt: 'd' },
+    { page: U('/q'), src: U('/unchecked.png'), alt: 'e' }
+  ], [
+    { src: U('/small.png'), status: 200, bytes: kb(40) }, { src: U('/big.jpg'), status: 200, bytes: kb(900) },
+    { src: U('/exact.png'), status: 200, bytes: kb(250) }, { src: U('/gone.png'), status: 404, bytes: null }
+  ]);
+  assert.deepEqual(typesOf(a, U('/p')), ['images_oversized']);
+  assert.deepEqual(typesOf(a, U('/q')), ['images_broken']);
+  const big = a.images.find(i => i.src === U('/big.jpg'));
+  assert.equal(big.bytes, kb(900));
+  assert.equal(a.images.find(i => i.src === U('/unchecked.png')).checked, false);
+  assert.equal(a.images.find(i => i.src === U('/unchecked.png')).bytes, null);
+  assert.equal(sevOf(a, 'images_broken'), 'critical');
+  assert.match(a.issues.find(i => i.type === 'images_oversized').detail, /900 KB/);
+});

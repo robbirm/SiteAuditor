@@ -75,8 +75,9 @@ test('full crawl through the API: progress, filtered lists, details and complete
     assert.equal(r.status, 200, name);
     assert.match(r.headers.get('content-type'), /text\/csv/);
     assert.match(r.headers.get('content-disposition'), new RegExp(`attachment; filename="modernise-${name}-`));
-    const text = await r.text();
-    assert.ok(text.startsWith('\uFEFF'));
+    const buf = Buffer.from(await r.arrayBuffer());
+    assert.deepEqual([...buf.subarray(0, 3)], [0xEF, 0xBB, 0xBF], name + ' BOM');   // fetch's .text() would hide the BOM
+    const text = buf.toString('utf8');
     const n = text.split('\r\n').filter(Boolean).length;
     if (count) assert.equal(n, count, name + ' rows');
   }
@@ -110,4 +111,54 @@ test('page limit is clamped to the 1,000 maximum and defaults to 500', async () 
   const b = await (await post('/api/crawls', { url: START })).json();
   assert.equal(b.limit, 500);
   await waitFor(b.id, ['done']);
+});
+
+test('PDF report: branded download, validation, size limit and 409 while a crawl is running', async () => {
+  const { assertValidPdf, pdfText, makePng, dataUrl } = require('./pdfhelpers');
+  const png = makePng({ w: 30, h: 10, ct: 6, samples: x => [20, 100, 200, x * 8] });
+  const pages = hub(4);
+  pages['/'] = okPage('/', { links: [['/p0', 'P0'], ['/p1', 'P1']], imgs: [['/i1.png', 'Logo'], ['/i2.png']] });
+  pages['/i1.png'] = { type: 'image/png', headers: { 'content-length': String(40 * 1024) } };
+  pages['/i2.png'] = { type: 'image/png', headers: { 'content-length': String(900 * 1024) } };
+  useSite(pages);
+  const { id } = await (await post('/api/crawls', { url: START })).json();
+  await waitFor(id, ['done']);
+
+  const r = await post(`/api/crawls/${id}/report`, { company: 'Acme Studio', client: 'Client Ltd', accent: '#0f766e', logoAlign: 'right', logo: dataUrl(png) });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /application\/pdf/);
+  assert.match(r.headers.get('content-disposition'), /attachment; filename="modernise-seo-report-93\.184\.216\.34-\d{4}-\d{2}-\d{2}\.pdf"/);
+  const pdf = Buffer.from(await r.arrayBuffer());
+  assert.equal(Number(r.headers.get('content-length')), pdf.length);
+  const { pages: pageCount } = assertValidPdf(pdf);
+  assert.ok(pageCount >= 6);
+  const text = pdfText(pdf);
+  assert.match(text, /Acme Studio/); assert.match(text, /Client Ltd/); assert.match(text, /Oversized images/);   // the 900 KB image was measured during the crawl
+
+  assert.equal((await post(`/api/crawls/${id}/report`)).status, 200);                                     // no branding at all is fine
+  const bad = await post(`/api/crawls/${id}/report`, { logo: 'data:image/png;base64,' + Buffer.from('nope').toString('base64') });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /PNG/);
+  assert.equal((await post(`/api/crawls/${id}/report`, { logo: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' })).status, 400);
+  const big = await call(`/api/crawls/${id}/report`, { method: 'POST', body: JSON.stringify({ logo: 'data:image/png;base64,' + 'A'.repeat(2.8e6) }) });
+  assert.equal(big.status, 413);                                                                        // only this route accepts a large body, and only up to the limit
+  assert.equal((await post(`/api/crawls/${'e'.repeat(24)}/report`)).status, 404);
+  assert.equal((await post('/api/crawls', { url: START, limit: 'x'.repeat(3000) })).status, 413);      // other routes keep the small limit
+  assert.equal((await post(`/api/crawls/${id}/report`, { logo: dataUrl(png) }, { Origin: 'https://evil.example' })).status, 403);
+
+  // the image export now carries file size and status
+  const csv = await (await call(`/api/crawls/${id}/export/images.csv`)).text();
+  assert.match(csv.split('\r\n')[0], /File Size \(KB\),Image HTTP Status/);
+  assert.match(csv, /i2\.png,.*,900,200/);
+});
+
+test('a report cannot be requested while the crawl is still running', async () => {
+  useSite(hub(60), { latency: 30 });
+  const { id } = await (await post('/api/crawls', { url: START, limit: 60 })).json();
+  const r = await post(`/api/crawls/${id}/report`, {});
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).error, /still running/);
+  await post(`/api/crawls/${id}/cancel`);
+  await waitFor(id, ['cancelled']);
+  assert.equal((await post(`/api/crawls/${id}/report`, {})).status, 200);                               // a stopped crawl can still be reported (partial)
 });

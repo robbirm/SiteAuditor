@@ -7,7 +7,8 @@ const { parseUserUrl } = require('../lib/safeUrl');
 const { exportCsv } = require('../lib/csv');
 const { BASE, html, okPage, fakeSite } = require('./fixtures');
 
-const dupe = { title: 'Shared duplicate title text', desc: 'Shared duplicate description text' };
+const dupe = { title: 'Shared duplicate title text for the duplicate pages', desc: 'Shared duplicate description text that is used on more than one page of this website' };
+const img = (kb) => ({ type: 'image/png', headers: { 'content-length': String(kb * 1024) } });
 const pages = {
   '/robots.txt': { status: 200, type: 'text/plain', html: 'User-agent: *\nDisallow: /private\n' },
   '/': okPage('/', { links: ['/about', '/dup1', '/dup2', '/gone', '/old1', '/loopA', '/canon-other', '/canon-bad', '/noindex', '/noh1', '/multih1', '/images', '/notitle', '/private', '/file.pdf'].map(p => [p, p]) }),
@@ -22,7 +23,8 @@ const pages = {
   '/noh1': okPage('/noh1', { h1: [] }), '/multih1': okPage('/multih1', { h1: ['One', 'Two'] }),
   '/images': okPage('/images', { imgs: [['/img/a.png', 'A cat'], ['/img/b.png'], ['/img/c.png', '']] }),
   '/notitle': { status: 200, html: html({ title: null, desc: null, canonical: BASE + '/notitle' }) },
-  '/private': okPage('/private')
+  '/private': okPage('/private'),
+  '/img/a.png': img(40), '/img/b.png': img(40), '/img/c.png': img(40)
 };
 
 test('messy site: every issue type is detected on the right URL with the right severity', async () => {
@@ -74,4 +76,47 @@ test('messy site: every issue type is detected on the right URL with the right s
   assert.equal(lines(exportCsv('links', a)).length, 1 + c.links.length);
   assert.equal(lines(exportCsv('broken-links', a)).length, 2);
   assert.equal(lines(exportCsv('images', a)).length, 1 + c.images.length);
+});
+
+test('image sizes, broken images, language/viewport/word count and sitemap/robots are collected during a crawl', async () => {
+  const kb = n => ({ type: 'image/png', headers: { 'content-length': String(n * 1024) } });
+  const site = fakeSite({
+    '/robots.txt': { status: 200, type: 'text/plain', html: 'User-agent: *\nDisallow:\nSitemap: ' + BASE + '/map.xml\n' },
+    '/map.xml': { status: 200, type: 'application/xml', html: '<?xml version="1.0"?><urlset><url><loc>' + BASE + '/</loc></url><url><loc>' + BASE + '/a</loc></url></urlset>' },
+    '/': okPage('/', { links: [['/a', 'A']], imgs: [['/img/ok.png', 'ok'], ['/img/huge.jpg', 'huge'], ['/img/missing.png', 'gone'], ['https://cdn.other.example.org/x.png', 'external']] }),
+    '/a': { status: 200, html: '<html><head><title>No lang or viewport page for the checks</title></head><body><h1>Hi</h1><script>var a = "ignore these words ".repeat(50)</script><p>one two three</p></body></html>' },
+    '/img/ok.png': kb(50), '/img/huge.jpg': kb(900)
+  });
+  const c = new Crawl('s2', parseUserUrl(BASE + '/'), 50, { fetchUrl: site.fetchUrl, fetchFollow: site.fetchFollow, delayMs: 0 });
+  await c.run();
+  assert.equal(c.status, 'done');
+  assert.deepEqual(c.siteChecks.robots, { found: true, status: 200 });
+  assert.deepEqual(c.siteChecks.sitemap, { found: true, url: BASE + '/map.xml', urls: 2 });
+  assert.equal(c.siteChecks.https, true);
+  const home = c.results.find(r => r.url === BASE + '/'), pa = c.results.find(r => r.url === BASE + '/a');
+  assert.equal(home.lang, 'en'); assert.equal(home.viewport, true); assert.ok(home.words >= 320);
+  assert.equal(pa.lang, ''); assert.equal(pa.viewport, false); assert.ok(pa.words < 10, 'script text must not count as words: ' + pa.words);
+  assert.equal(c.imageChecks.length, 3);                                   // own-site images only; the external CDN image is not requested
+  assert.equal(site.stats.requests.some(u => u.includes('cdn.other')), false);
+  const a = c.analysis(true);
+  assert.equal(a.images.find(i => i.src.endsWith('huge.jpg')).bytes, 900 * 1024);
+  assert.ok(a.pages.find(p => p.url === BASE + '/').issues.map(i => i.type).includes('images_oversized'));
+  assert.ok(a.pages.find(p => p.url === BASE + '/').issues.map(i => i.type).includes('images_broken'));
+  assert.ok(a.pages.find(p => p.url === BASE + '/a').issues.map(i => i.type).includes('missing_viewport'));
+  assert.ok(a.pages.find(p => p.url === BASE + '/a').issues.map(i => i.type).includes('thin_content'));
+});
+
+test('image checks use headers only (no downloads), respect robots.txt and are skipped when cancelled', async () => {
+  const site = fakeSite({
+    '/robots.txt': { status: 200, type: 'text/plain', html: 'User-agent: *\nDisallow: /private-img\n' },
+    '/': okPage('/', { imgs: [['/private-img/a.png', 'a'], ['/img/b.png', 'b']] }), '/img/b.png': { type: 'image/png', headers: { 'content-length': '2048' } }
+  });
+  const seen = [];
+  const real = site.fetchUrl;
+  site.fetchUrl = async (u, o) => { seen.push([u, o && o.maxBytes]); return real(u, o); };
+  const c = new Crawl('s3', parseUserUrl(BASE + '/'), 50, { fetchUrl: site.fetchUrl, fetchFollow: site.fetchFollow, delayMs: 0 });
+  await c.run();
+  assert.deepEqual(c.imageChecks.map(i => i.src), [BASE + '/img/b.png']);   // the robots-blocked image was never requested
+  assert.equal(seen.some(([u]) => u.includes('private-img')), false);
+  assert.ok(seen.filter(([u]) => u.endsWith('b.png')).every(([, max]) => max <= 1024));
 });

@@ -7,6 +7,7 @@ const { parseUserUrl, preflight, UrlError } = require('./lib/safeUrl');
 const { exportCsv } = require('./lib/csv');
 const { queryList } = require('./lib/lists');
 const { createStore, pickDir } = require('./lib/store');
+const { buildReport, PdfError } = require('./lib/report');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
@@ -62,6 +63,8 @@ app.use((req, res, next) => {
   next();
 });
 app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+// The PDF report accepts a logo as a data URL (max ~1.5 MB), so only that route gets a bigger body limit.
+app.use('/api/crawls/:id/report', express.json({ limit: '2.6mb' }));
 app.use(express.json({ limit: '2kb' }));
 
 // ---- Storage: crawls are saved to disk so every server process (and a restart) can read them ----
@@ -114,6 +117,22 @@ app.post('/api/crawls/:id/cancel', find, (req, res) => {
   if (c) { c.cancel(); return res.json(c.progress()); }
   const p = req.view.progress();
   res.json(['queued', 'running'].includes(p.status) ? { ...p, status: 'cancelling' } : p);
+});
+
+// Branded PDF report. Body: { company, client, accent, logoAlign, logo: 'data:image/png;base64,...' } (all optional)
+app.post('/api/crawls/:id/report', find, (req, res) => {
+  if (!['done', 'cancelled', 'error'].includes(req.view.meta.status)) return res.status(409).json({ error: 'The audit is still running. Please wait for it to finish before creating the report.' });
+  let pdf;
+  try { pdf = buildReport(req.view, req.body || {}); }
+  catch (e) {
+    if (e instanceof PdfError) return res.status(400).json({ error: e.message });
+    console.error('Report failed:', e);
+    return res.status(500).json({ error: 'The report could not be created.' });
+  }
+  const site = String(req.view.meta.site || 'site').replace(/[^a-z0-9.-]/gi, '');
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Length': pdf.length,
+    'Content-Disposition': `attachment; filename="modernise-seo-report-${site}-${new Date().toISOString().slice(0, 10)}.pdf"` });
+  res.send(pdf);
 });
 
 // pages | issues | links | broken-links | images: always ALL records, never just the visible table rows

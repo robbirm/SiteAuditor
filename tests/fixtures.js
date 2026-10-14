@@ -4,25 +4,26 @@ const BASE = 'https://site.example.com';
 
 const row = (url, o = {}) => ({
   url, status: 200, contentType: 'text/html', parsed: true, blocked: false,
-  title: 'A good page title for ' + url, metaDescription: 'A helpful description for ' + url,
+  title: 'A good page title for ' + url, metaDescription: 'A helpful and descriptive meta description written for the page at ' + url,
+  words: 500, lang: 'en', viewport: true,
   h1: ['Heading'], h1Count: 1, canonical: url, metaRobots: '', xRobots: '', redirectTo: '',
   responseMs: 10, discoveredFrom: '', note: '', ...o
 });
 
 // html({title, desc, h1, canonical, robots, links:[[href,text]], imgs:[[src,alt]]}); title/desc null = omit the tag
 const html = ({ title, desc, h1 = ['Main heading'], canonical, robots, links = [], imgs = [] } = {}) =>
-  '<!doctype html><html><head>' +
+  '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1">' +
   (title === null ? '' : `<title>${title === undefined ? 'Default page title' : title}</title>`) +
   (desc === null ? '' : `<meta name="description" content="${desc === undefined ? 'Default description' : desc}">`) +
   (canonical ? `<link rel="canonical" href="${canonical}">` : '') +
   (robots ? `<meta name="robots" content="${robots}">` : '') +
-  '</head><body>' + h1.map(x => `<h1>${x}</h1>`).join('') +
+  '</head><body>' + h1.map(x => `<h1>${x}</h1>`).join('') + `<p>${'word '.repeat(320)}</p>` +
   links.map(([href, text]) => `<a href="${href}">${text || 'link'}</a>`).join('') +
   imgs.map(([src, alt]) => `<img src="${src}"${alt === undefined ? '' : ` alt="${alt}"`}>`).join('') +
   '</body></html>';
 
 // A healthy page: unique title/description, one H1, self canonical.
-const okPage = (path, o = {}) => ({ status: 200, html: html({ title: `${path} page title`, desc: `${path} page description`, canonical: BASE + path, ...o }) });
+const okPage = (path, o = {}) => ({ status: 200, html: html({ title: `Page ${path} | A descriptive title for tests`, desc: `This is a helpful description for the page at ${path} on the test website, written for automated tests.`, canonical: BASE + path, ...o }) });
 
 // Fake of lib/fetcher's fetchUrl: pages = { '/path': {status, html, type, headers, location} }. Unknown paths are 404.
 function fakeSite(pages, { latency = 0 } = {}) {
@@ -46,7 +47,7 @@ function fakeSite(pages, { latency = 0 } = {}) {
       return { status, headers, contentType: type, responseMs: 5, body, truncated: false };
     } finally { stats.active--; }
   }
-  return { fetchUrl, fetchFollow: fetchUrl, stats, pageRequests: () => stats.requests.filter(u => !u.endsWith('/robots.txt')) };
+  return { fetchUrl, fetchFollow: fetchUrl, stats, pageRequests: () => stats.requests.filter(u => !/\/(robots\.txt|sitemap\.xml)$/.test(u) && !/\.(png|jpe?g|gif|webp|svg)$/.test(u)) };
 }
 
 module.exports = { BASE, row, html, okPage, fakeSite };

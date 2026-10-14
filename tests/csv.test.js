@@ -35,7 +35,7 @@ test('column headers match the requested fields', () => {
   const a = bigAnalysis(3);
   assert.equal(lines(exportCsv('issues', a))[0], 'Severity,Issue Type,Issue Code,Affected URL,Detail,Suggested Fix');
   assert.equal(lines(exportCsv('broken-links', a))[0], 'Source URL,Broken Destination URL,Anchor Text,Status Code,Status');
-  assert.equal(lines(exportCsv('images', a))[0], 'Image URL,Source Page URL,ALT Status,ALT Text');
+  assert.equal(lines(exportCsv('images', a))[0], 'Image URL,Source Page URL,ALT Status,ALT Text,File Size (KB),Image HTTP Status');
   assert.equal(lines(exportCsv('links', a))[0], 'Source URL,Destination URL,Anchor Text,Link Type,Status Code,Status');
   const pagesHeader = lines(exportCsv('pages', a))[0];
   for (const h of ['URL', 'Status Code', 'Title', 'Meta Description', 'H1 Headings', 'Canonical URL', 'Response Time (ms)', 'Issues']) assert.ok(pagesHeader.split(',').includes(h), h);

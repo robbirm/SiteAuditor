@@ -105,6 +105,19 @@ tbody tr:hover{background:var(--hover)}tbody tr:hover td:first-child{box-shadow:
 .mask{position:fixed;inset:0;background:rgba(5,8,20,.5);backdrop-filter:blur(6px);display:grid;place-items:center;padding:16px;z-index:9;animation:fade .2s both}
 .modal{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:20px;width:min(740px,100%);max-height:86vh;display:flex;flex-direction:column;gap:10px;box-shadow:0 30px 80px -20px rgba(0,0,0,.5);animation:pop .35s var(--ease) both}
 .kvr{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}.kk{width:130px;flex:none;color:var(--mut);font-size:12px}.kvv{min-width:0;word-break:break-word;flex:1}
+.fld{display:grid;gap:5px;margin-bottom:12px}.fld>label,.fld>.lb{font-size:12px;color:var(--mut);font-weight:550}
+.fld input[type=text]{padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);outline:none;width:100%}
+.fld input[type=text]:focus,.q:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-s)}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.drop{border:1.5px dashed var(--line);border-radius:14px;padding:14px;display:flex;align-items:center;gap:14px;background:var(--panel2);min-height:84px}
+.drop:hover{border-color:var(--blue)}
+.prev{width:150px;height:56px;border-radius:10px;background:repeating-conic-gradient(var(--hover) 0 25%,var(--panel) 0 50%) 0 0/14px 14px;display:grid;place-items:center;flex:none;overflow:hidden;border:1px solid var(--line)}
+.prev img{max-width:100%;max-height:100%;display:block}
+.seg{display:flex;gap:6px}.acc{width:44px;height:36px;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer}
+.pg{border:1px solid var(--line);border-radius:12px;background:#fff;padding:10px 12px;display:flex;align-items:center;gap:10px;min-height:46px}
+.pg.l{justify-content:flex-start}.pg.c{justify-content:center}.pg.r{justify-content:flex-end}
+.pg img{max-height:26px;max-width:150px}.pg span{color:#667085;font-size:11px}
+@media (max-width:820px){.fgrid{grid-template-columns:1fr}.drop{flex-direction:column;align-items:flex-start}}
 summary{cursor:pointer;color:var(--blue);font-weight:550;margin-top:10px}
 @media (max-width:820px){
 .app{flex-direction:column}
@@ -207,6 +220,57 @@ function ExportBtn({crawlId,file,label,primary}){
   return crawlId?h('a',{className:cls,href:'/api/crawls/'+crawlId+'/export/'+file+'.csv',download:''},label):h('button',{className:cls,disabled:true},label);
 }
 
+/* ---------- PDF report + branding ---------- */
+const BRAND_KEY='msa_brand',MAX_LOGO=1.5*1024*1024;
+function loadBrand(){try{const b=JSON.parse(lsGet(BRAND_KEY)||'null');if(b&&typeof b==='object')return{company:String(b.company||''),client:String(b.client||''),accent:/^#[0-9a-f]{6}$/i.test(b.accent)?b.accent:'#2563eb',logoAlign:['left','center','right'].includes(b.logoAlign)?b.logoAlign:'center',logo:/^data:image\/(png|jpeg);base64,/.test(b.logo||'')?b.logo:''}}catch(e){}return{company:'',client:'',accent:'#2563eb',logoAlign:'center',logo:''}}
+function readLogo(file){return new Promise((ok,no)=>{
+  if(!file)return no(new Error('No file chosen.'));
+  if(!/^image\/(png|jpeg)$/.test(file.type))return no(new Error('Please choose a PNG or JPG image.'));
+  if(file.size>MAX_LOGO)return no(new Error('That image is '+(file.size/1048576).toFixed(1)+' MB. The maximum is 1.5 MB.'));
+  const r=new FileReader();r.onerror=()=>no(new Error('The image could not be read.'));r.onload=()=>ok(String(r.result));r.readAsDataURL(file);
+})}
+function ReportModal({crawlId,partial,onClose}){
+  const [b,setB]=useState(loadBrand),[busy,setBusy]=useState(false),[msg,setMsg]=useState(''),[done,setDone]=useState(false),[remember,setRemember]=useState(true);
+  const set=(k,v)=>setB(x=>({...x,[k]:v}));
+  async function pick(e){const f=e.target.files&&e.target.files[0];e.target.value='';setMsg('');try{set('logo',await readLogo(f))}catch(x){setMsg(x.message)}}
+  async function make(){
+    setBusy(true);setMsg('');setDone(false);
+    try{
+      const res=await fetch('/api/crawls/'+crawlId+'/report',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+      if(!res.ok){let j=null;try{j=await res.json()}catch(x){}throw new Error((j&&j.error)||('The report could not be created ('+res.status+').'))}
+      const blob=await res.blob();
+      const m=/filename="([^"]+)"/.exec(res.headers.get('Content-Disposition')||'');
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=m?m[1]:'modernise-seo-report.pdf';document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+      lsSet(BRAND_KEY,remember?JSON.stringify(b):null);setDone(true);
+    }catch(x){setMsg(x.message==='Failed to fetch'?'Cannot reach the backend. Is the Node.js server running?':x.message)}
+    setBusy(false);
+  }
+  return d('mask',{onClick:busy?null:onClose},h('div',{className:'modal',onClick:e=>e.stopPropagation()},
+    h('h2',null,'Download PDF report'),
+    d('mut','Add your own branding. The logo is printed in the footer of every page.'+(partial?' This audit was stopped early, so the report covers the pages crawled so far.':'')),
+    d('',{style:{overflow:'auto',minHeight:0,paddingRight:2}},
+      d('fld',d('lb','Logo (PNG or JPG, max 1.5 MB)'),
+        d('drop',d('prev',b.logo?h('img',{src:b.logo,alt:'Logo preview'}):d('mut','No logo')),
+          d('',null,h('label',{className:'btn',style:{display:'inline-block'}},b.logo?'Replace logo':'Upload logo',h('input',{type:'file',accept:'image/png,image/jpeg',onChange:pick,style:{display:'none'},'aria-label':'Upload logo'})),
+            b.logo?h('button',{className:'btn',style:{marginLeft:8},onClick:()=>set('logo','')},'Remove'):null))),
+      d('fld',d('lb','Logo position'),d('seg',...[['left','Left'],['center','Centre'],['right','Right']].map(([v,l])=>h('button',{key:v,className:'chip'+(b.logoAlign===v?' on':''),onClick:()=>set('logoAlign',v)},l)))),
+      d('fgrid',
+        d('fld',h('label',{htmlFor:'bc'},'Your company name'),h('input',{id:'bc',type:'text',maxLength:80,value:b.company,placeholder:'Modernise My Business',onChange:e=>set('company',e.target.value)})),
+        d('fld',h('label',{htmlFor:'bl'},'Prepared for (client)'),h('input',{id:'bl',type:'text',maxLength:80,value:b.client,placeholder:'Client name',onChange:e=>set('client',e.target.value)}))),
+      d('fld',h('label',{htmlFor:'ba'},'Accent colour'),d('tools',{style:{margin:0}},h('input',{id:'ba',className:'acc',type:'color',value:b.accent,onChange:e=>set('accent',e.target.value)}),d('mut',b.accent.toUpperCase()))),
+      d('fld',d('lb','Footer preview'),d('pg '+({left:'l',center:'c',right:'r'})[b.logoAlign],b.logo?h('img',{src:b.logo,alt:''}):null,h('span',null,(b.company||'Your company')+' · Page 1'))),
+      h('label',{className:'mut',style:{display:'flex',gap:8,alignItems:'center'}},h('input',{type:'checkbox',checked:remember,onChange:e=>setRemember(e.target.checked)}),'Remember these settings in this browser')),
+    msg?d('banner err',{style:{margin:0}},msg):null,
+    done?d('banner',{style:{margin:0,background:'var(--grn-s)',color:'var(--grn)'}},'Your report has been downloaded.'):null,
+    d('tools',{style:{justifyContent:'flex-end',marginBottom:0}},
+      h('button',{className:'btn',onClick:onClose,disabled:busy},done?'Close':'Cancel'),
+      h('button',{className:'btn p',onClick:make,disabled:busy||!crawlId},busy?'Creating report…':'Download PDF'))));
+}
+function ReportBtn({canReport,onOpen,primary}){
+  return h('button',{className:'btn'+(primary?' p':''),disabled:!canReport,onClick:onOpen,title:canReport?'':'Available when the audit has finished'},'Download PDF report');
+}
+
 // One searchable / filterable / paginated table backed by /api/crawls/:id/<section>
 function ListPage({section,crawlId,tick,ph,filters,cols,btns,onRow,init,sortable}){
   const [q,setQ]=useState(''),dq=useDebounced(q,300);
@@ -277,7 +341,7 @@ function Dashboard({pr,crawlId,tick,go,onRow}){
         h('button',{className:'btn',style:{marginTop:10},onClick:()=>go('pages',{severity:'critical'})},'View all →'))));
 }
 
-function Exports({crawlId,s}){
+function Exports({crawlId,s,canReport,onReport}){
   const t=s&&s.totals;
   const items=[
     ['pages','All Pages','Every crawled URL with status, title, description, headings, canonical, response time and SEO data.',t&&t.pages],
@@ -285,7 +349,8 @@ function Exports({crawlId,s}){
     ['links','All Links','Every link found: source, destination, anchor text and status.',t&&t.links],
     ['broken-links','Broken Links','Source pages and their broken internal destinations.',t&&t.brokenLinks],
     ['images','Images','Every image with its source page and ALT attribute status.',t&&t.images]];
-  return d('ex',...items.map(([f,title,desc,n])=>h('div',{className:'card',key:f},h('h2',null,title),h('p',{className:'mut'},desc),d('mut',crawlId?num(n)+' rows (all rows are exported)':'Run an audit first'),h(ExportBtn,{crawlId,file:f,label:'Export '+title+' CSV',primary:true}))));
+  const rep=h('div',{className:'card',key:'pdf'},h('h2',null,'PDF report'),h('p',{className:'mut'},'A branded overview: health score, what is good, what needs improving, charts, image and speed checks, and a prioritised action plan.'),d('mut',canReport?'Add your logo before downloading':crawlId?'Available when the audit has finished':'Run an audit first'),h(ReportBtn,{canReport,onOpen:onReport,primary:true}));
+  return d('ex',rep,...items.map(([f,title,desc,n])=>h('div',{className:'card',key:f},h('h2',null,title),h('p',{className:'mut'},desc),d('mut',crawlId?num(n)+' rows (all rows are exported)':'Run an audit first'),h(ExportBtn,{crawlId,file:f,label:'Export '+title+' CSV',primary:true}))));
 }
 
 const PAGES_COLS=[
@@ -297,13 +362,15 @@ const PAGES_COLS=[
   {l:'Issues',sk:'severity',r:p=>p.issues.length?h(React.Fragment,null,sevB(p.severity),' '+p.issues.length):sevB('ok')}];
 const ISSUE_COLS=[{l:'Severity',r:i=>sevB(i.severity)},{l:'Issue',r:i=>i.label},{l:'Affected URL',r:i=>mono(i.url)},{l:'Detail',r:i=>i.detail?short(i.detail,140):dim()},{l:'Suggested fix',r:i=>i.fix}];
 const LINK_COLS=[{l:'Source page',r:l=>mono(l.source)},{l:'Destination',r:l=>mono(l.destination)},{l:'Anchor text',r:l=>l.anchor||dim()},{l:'Type',r:l=>l.type},{l:'Status',r:linkB}];
-const IMAGE_COLS=[{l:'Image',r:i=>mono(i.src)},{l:'Source page',r:i=>mono(i.page)},{l:'ALT status',r:altB},{l:'ALT text',r:i=>i.alt?short(i.alt,80):dim()}];
+const kb=i=>i.bytes==null?dim(i.checked?'Unknown':'Not checked'):h('span',{className:i.bytes>250*1024?'b warning':null},Math.round(i.bytes/1024).toLocaleString()+' KB');
+const imgHttp=i=>i.imgStatus==null?dim():h('span',{className:'b '+(i.imgStatus>=400||i.imgStatus===0?'error':'ok')},i.imgStatus===0?'Failed':i.imgStatus);
+const IMAGE_COLS=[{l:'Image',r:i=>mono(i.src)},{l:'Source page',r:i=>mono(i.page)},{l:'ALT status',r:altB},{l:'ALT text',r:i=>i.alt?short(i.alt,80):dim()},{l:'Size',r:kb},{l:'HTTP',r:imgHttp}];
 
 /* ---------- app ---------- */
 const NAV=[['dash','Dashboard','◧'],['pages','All Pages','▤'],['issues','Issues','⚠'],['links','Links','⛓'],['images','Images','▣'],['exports','Exports','⇩']];
 function App(){
   const [view,setView]=useState('dash'),[init,setInit]=useState(null),[url,setUrl]=useState(''),[limit,setLimit]=useState(500),[max,setMax]=useState(1000);
-  const [backend,setBackend]=useState('checking'),[crawlId,setCrawlId]=useState(null),[pr,setPr]=useState(null),[err,setErr]=useState(''),[detail,setDetail]=useState(null);
+  const [backend,setBackend]=useState('checking'),[crawlId,setCrawlId]=useState(null),[pr,setPr]=useState(null),[err,setErr]=useState(''),[detail,setDetail]=useState(null),[showRep,setShowRep]=useState(false);
   const [theme,setTheme]=useState(()=>{try{return matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}catch(e){return'light'}});
   useEffect(()=>{document.documentElement.setAttribute('data-theme',theme)},[theme]);
 
@@ -317,7 +384,7 @@ function App(){
     return()=>{dead=true};
   },[]);
 
-  const status=pr&&pr.status,active=!!status&&ACTIVE.includes(status);
+  const status=pr&&pr.status,active=!!status&&ACTIVE.includes(status),canReport=!!crawlId&&!!status&&!active&&pr.pagesCrawled>0;
   useEffect(()=>{ // real progress: poll the backend while a crawl is running
     if(!crawlId||!active)return;
     let dead=false;
@@ -345,7 +412,7 @@ function App(){
       ...NAV.map(([k,l,ic])=>h('button',{key:k,className:'nav'+(view===k?' on':''),onClick:()=>go(k)},h('span',null,ic),l,cnt[k]!=null?h('span',{className:'n'},num(cnt[k])):null)),
       d('sp'),h('button',{className:'nav',onClick:()=>setTheme(theme==='dark'?'light':'dark')},h('span',null,theme==='dark'?'☀':'☾'),theme==='dark'?'Light mode':'Dark mode')),
     h('main',{className:'main'},
-      d('top',h('div',null,h('h1',null,T),d('mut',active?h('span',{className:'dot'}):null,pr?pr.startUrl+' · '+(STATUS_LABEL[pr.status]||pr.status):'No audit run yet'))),
+      d('top',h('div',null,h('h1',null,T),d('mut',active?h('span',{className:'dot'}):null,pr?pr.startUrl+' · '+(STATUS_LABEL[pr.status]||pr.status):'No audit run yet')),h(ReportBtn,{canReport,onOpen:()=>setShowRep(true)})),
       backend==='down'?d('banner err','Backend not connected. Start the Node.js server (npm run dev) and open this page from it. No sample data is shown.'):null,
       err?d('banner err',err):null,
       d('card audit',
@@ -354,6 +421,7 @@ function App(){
         active?h('button',{className:'btn',onClick:cancel,disabled:status==='cancelling'},status==='cancelling'?'Cancelling…':'Cancel'):null,
         h('button',{className:'btn p',disabled:active||backend!=='ok'||!url.trim(),onClick:start},active?'Auditing… '+pr.percent+'%':'Start Audit'),
         active?d('bar',h('i',{style:{width:pr.percent+'%'}})):null,
+        active&&pr.phase?d('mut',{style:{width:'100%'}},pr.phase+'…'):null,
         active?d('mut',{style:{width:'100%'}},'Crawled '+num(pr.pagesCrawled)+' pages · '+num(pr.discovered)+' URLs discovered · '+num(pr.queued)+' queued · limit '+num(pr.limit)):null),
       d('cards',stat('Pages crawled',h(AnimNum,{value:pr?pr.pagesCrawled:null}),null,'▤'),stat('Critical',h(AnimNum,{value:s?s.counts.critical:null}),'var(--red)','!'),stat('Warnings',h(AnimNum,{value:s?s.counts.warning:null}),'var(--amb)','▲'),stat('Broken links',h(AnimNum,{value:s?s.totals.brokenLinks:null}),'var(--red)','⛓'),stat('Health score',h(AnimNum,{value:s?s.score:null,suffix:'/100'}),scoreColor,'★')),
       d('view',{key:vk},view==='dash'&&h(Dashboard,{pr,crawlId,tick,go,onRow:setDetail}),
@@ -368,9 +436,10 @@ function App(){
         filters:[{name:'filter',type:'chips',opts:[['all','All'],['broken','Broken'],['redirect','Redirects'],['internal','Internal'],['external','External']]}]}),
       view==='images'&&h(ListPage,{...common,key:vk,section:'images',ph:'Search image URL, page or ALT text…',cols:IMAGE_COLS,onRow:null,
         btns:[h(ExportBtn,{key:'e',crawlId,file:'images',label:'Export Images CSV'})],
-        filters:[{name:'filter',type:'chips',opts:[['all','All'],['missing','Missing ALT'],['empty','Empty ALT'],['present','Has ALT']]}]}),
-      view==='exports'&&h(Exports,{crawlId,s}))),
-    detail?h(Detail,{p:detail,onClose:()=>setDetail(null)}):null);
+        filters:[{name:'filter',type:'chips',opts:[['all','All'],['missing','Missing ALT'],['empty','Empty ALT'],['present','Has ALT'],['oversized','Over 250 KB'],['broken','Broken']]}]}),
+      view==='exports'&&h(Exports,{crawlId,s,canReport,onReport:()=>setShowRep(true)}))),
+    detail?h(Detail,{p:detail,onClose:()=>setDetail(null)}):null,
+    showRep?h(ReportModal,{crawlId,partial:status==='cancelled'||status==='error',onClose:()=>setShowRep(false)}):null);
 }
 ReactDOM.createRoot(document.getElementById('root')).render(h(App));
 </script>
