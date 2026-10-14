@@ -1,32 +1,39 @@
-# Modernise Site Auditor (backend stage 1)
+# Modernise Site Auditor
 
-Private Node.js + Express + Cheerio crawler. The existing dashboard is in `public/index.html`
-(unchanged for now: it still shows sample data until stage 2 connects it to the API).
+Private Node.js + Express + Cheerio SEO crawler with the Modernise dashboard (`public/index.html`).
 
-## Test locally (outside Claude)
-1. Install Node.js 20 or newer (nodejs.org, LTS).
-2. In this folder: `npm install`
-3. Copy `.env.example` to `.env` and set `ADMIN_PASSWORD` (12+ characters).
-4. `npm run dev`, then open http://localhost:3000 (browser asks for the username and password).
+## Run locally
+1. Install Node.js 20 or newer.  2. `npm install`  3. Copy `.env.example` to `.env`, set `ADMIN_PASSWORD` (12+ chars).
+4. `npm run dev` and open http://localhost:3000 (browser asks for the username and password).
+5. `npm test` runs the automated tests (see below).
 
-## Try the API (second terminal; replace PASSWORD)
-Start a small crawl:
-    curl -u admin:PASSWORD -X POST http://localhost:3000/api/crawls -H "Content-Type: application/json" -d '{"url":"https://books.toscrape.com","limit":20}'
-Check progress (use the id returned):
-    curl -u admin:PASSWORD http://localhost:3000/api/crawls/ID
-Download ALL scanned pages as CSV:
-    curl -u admin:PASSWORD -o pages.csv http://localhost:3000/api/crawls/ID/export/pages.csv
-Cancel:
-    curl -u admin:PASSWORD -X POST http://localhost:3000/api/crawls/ID/cancel
-Safety check (must return 400): 
-    curl -u admin:PASSWORD -X POST http://localhost:3000/api/crawls -H "Content-Type: application/json" -d '{"url":"http://169.254.169.254"}'
+## What it checks
+Critical: 404/4xx/5xx pages, pages that fail to load, broken internal links, missing title, redirect loops, redirects to error pages.
+Warning: missing/duplicate meta description, duplicate title, missing/multiple H1, redirect chains (2+ hops), canonical pointing to a non-200 URL, noindex (meta robots or X-Robots-Tag), images missing ALT.
+Info: single redirects, missing canonical, canonical pointing to a different URL, URLs blocked by robots.txt.
+(`alt=""` is treated as intentionally decorative, not an error.)
 
-## API
-POST /api/crawls {url, limit}  |  GET /api/crawls/:id  |  GET /api/crawls/:id/pages?offset=&limit=
-POST /api/crawls/:id/cancel    |  GET /api/crawls/:id/export/pages.csv  |  GET /healthz (no login)
+## Health score (how it is calculated)
+Every crawled page starts at 100. For each distinct issue type on the page subtract 25 (Critical), 10 (Warning) or 2 (Info), minimum 0.
+A page returning 4xx/5xx or failing to load scores 0. The site score is the average page score over all crawled pages
+(robots.txt-blocked pages excluded), rounded. The same text is shown in the dashboard ("How is this calculated?") and comes from `lib/analysis.js`.
+
+## API (all require HTTP Basic auth except /healthz)
+- `GET /api/status`
+- `POST /api/crawls {url, limit}` (limit default 500, max 1000)  |  `GET /api/crawls/:id` (progress + summary)  |  `POST /api/crawls/:id/cancel`
+- `GET /api/crawls/:id/{pages|issues|links|images}?q=&offset=&limit=` plus filters: pages `status=2xx|3xx|4xx|5xx|issues`, `severity`, `sort`, `dir`;
+  issues `severity`, `type`; links `filter=broken|redirect|internal|external`; images `filter=missing|empty|present`
+  (this replaces the earlier `/pages` response shape: rows are now in `rows`)
+- `GET /api/crawls/:id/export/{pages|issues|links|broken-links|images}.csv` always exports ALL records.
+
+## CSV
+UTF-8 with BOM and CRLF (opens correctly in Excel). Cells starting with `= + - @` are prefixed with `'` to prevent formula injection.
+
+## Tests (`npm test`, Node's built-in runner, no network needed)
+`analysis` (SEO rules and score), `csv` (all five exports, all rows, injection), `safeUrl` (SSRF blocking), `crawler` (discovery, limit,
+2-request concurrency, cancellation, robots.txt), `site` (messy fixture website end to end), `api` (login, validation, progress, filters, exports, cancel, 409, limit clamp).
 
 ## Notes
-- Page limit: default 500, max 1,000. It counts every URL fetched (images, PDFs and similar files are never queued).
-- Max 2 simultaneous requests, 300 ms pause between requests (longer if robots.txt asks).
-- Results live in memory only (last 5 crawls, 2 hours) and are lost on restart.
-- Only one crawl runs at a time.
+- Results are in memory only (last 5 crawls, 2 hours) and are lost on restart. One crawl at a time. Max 2 simultaneous requests.
+- The page limit counts every URL fetched; images, PDFs and similar files are never queued.
+- External links are listed but not checked. Links to URLs beyond the page limit show "Not crawled".

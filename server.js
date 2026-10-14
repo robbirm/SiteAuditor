@@ -4,7 +4,8 @@ const crypto = require('crypto');
 const express = require('express');
 const { Crawl } = require('./lib/crawler');
 const { parseUserUrl, preflight, UrlError } = require('./lib/safeUrl');
-const { toCsv } = require('./lib/csv');
+const { exportCsv } = require('./lib/csv');
+const { queryList } = require('./lib/lists');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
@@ -81,6 +82,8 @@ function find(req, res, next) {
 }
 
 // ---- API ----
+app.get('/api/status', (req, res) => res.json({ live: true, defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT }));
+
 app.post('/api/crawls', async (req, res, next) => {
   try {
     if (isBusy()) return res.status(409).json({ error: 'A crawl is already running. Cancel it or wait for it to finish.' });
@@ -93,7 +96,7 @@ app.post('/api/crawls', async (req, res, next) => {
     limit = Math.min(MAX_LIMIT, Math.max(1, limit));
     if (isBusy()) return res.status(409).json({ error: 'A crawl is already running.' });
     evict();
-    const crawl = new Crawl(crypto.randomBytes(12).toString('hex'), u, limit);
+    const crawl = new Crawl(crypto.randomBytes(12).toString('hex'), u, limit, app.locals.crawlOptions);
     crawls.set(crawl.id, crawl);
     crawl.run().catch(e => console.error(e));
     res.status(201).json(crawl.progress());
@@ -102,19 +105,22 @@ app.post('/api/crawls', async (req, res, next) => {
 
 app.get('/api/crawls/:id', find, (req, res) => res.json(req.crawl.progress()));
 
-app.get('/api/crawls/:id/pages', find, (req, res) => {
-  const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
-  const limit = Math.min(500, Math.max(1, Number.parseInt(req.query.limit, 10) || 100));
-  res.json({ total: req.crawl.results.length, offset, pages: req.crawl.page(offset, limit) });
+// pages | issues | links | images, each with ?q= search, filters, ?sort=&dir= (pages), ?offset=&limit=
+app.get('/api/crawls/:id/:section(pages|issues|links|images)', find, (req, res) => {
+  res.json(queryList(req.params.section, req.crawl.analysis(), req.query));
 });
 
 app.post('/api/crawls/:id/cancel', find, (req, res) => { req.crawl.cancel(); res.json(req.crawl.progress()); });
 
-app.get('/api/crawls/:id/export/pages.csv', find, (req, res) => {
+// pages | issues | links | broken-links | images: always ALL records, never just the visible table rows
+app.get('/api/crawls/:id/export/:file', find, (req, res) => {
+  const name = String(req.params.file).replace(/\.csv$/, '');
+  const csv = exportCsv(name, req.crawl.analysis(true));
+  if (csv === null) return res.status(404).json({ error: 'Unknown export' });
   const site = req.crawl.site.replace(/[^a-z0-9.-]/gi, '');
   res.set({ 'Content-Type': 'text/csv; charset=utf-8',
-    'Content-Disposition': `attachment; filename="modernise-pages-${site}-${new Date().toISOString().slice(0, 10)}.csv"` });
-  res.send(toCsv(req.crawl.results)); // ALL scanned pages
+    'Content-Disposition': `attachment; filename="modernise-${name}-${site}-${new Date().toISOString().slice(0, 10)}.csv"` });
+  res.send(csv);
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
@@ -130,4 +136,5 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 process.on('unhandledRejection', e => console.error('Unhandled rejection:', e));
-app.listen(PORT, () => console.log(`Modernise Site Auditor listening on port ${PORT}`));
+if (process.env.NODE_ENV !== 'test') app.listen(PORT, () => console.log(`Modernise Site Auditor listening on port ${PORT}`));
+module.exports = { app };
