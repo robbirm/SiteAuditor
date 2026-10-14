@@ -162,3 +162,14 @@ test('a report cannot be requested while the crawl is still running', async () =
   await waitFor(id, ['cancelled']);
   assert.equal((await post(`/api/crawls/${id}/report`, {})).status, 200);                               // a stopped crawl can still be reported (partial)
 });
+
+test('diagnostics endpoint needs login and reports what the server sees', async () => {
+  const anon = await fetch(base + '/api/diagnostics');
+  assert.equal(anon.status, 401);
+  const r = await call('/api/diagnostics');
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.dataDirWritable, true);
+  assert.match(j.node, /^v\d+/);
+  assert.ok(Array.isArray(j.savedCrawls));
+});

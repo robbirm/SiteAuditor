@@ -30,6 +30,10 @@ A page returning 4xx/5xx or failing to load scores 0. The site score is the aver
 - `POST /api/crawls/:id/report` (JSON body, optional branding) returns a PDF. Only allowed once the crawl is done/cancelled/error (409 otherwise). This route alone accepts a 2.6 MB body.
 - `GET /api/crawls/:id/export/{pages|issues|links|broken-links|images}.csv` always exports ALL records.
 
+## If something misbehaves on the host
+Open `/api/diagnostics` (after logging in). It shows the Node version, the data folder and whether it is writable, which crawls are saved and their status/message.
+The dashboard shows the real reason when a download or request fails (it no longer shows raw JSON). Pages listed in `sitemap.xml` (and its child sitemaps) are crawled as well, so sites whose menus are built with JavaScript are not stuck on one page.
+
 ## PDF report
 `POST /api/crawls/:id/report` with `{company, client, accent:'#rrggbb', logoAlign:'left|center|right', logo:'data:image/png|jpeg;base64,...'}` (all optional; logo max 1.5 MB, PNG or JPG only).
 The PDF has an overview with the health score, what is good / needs improvement / critical, charts (issue severity, score distribution, status codes, ALT coverage, response times), image and speed checks, a top-issues table and a prioritised action plan.

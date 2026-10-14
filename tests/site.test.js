@@ -120,3 +120,24 @@ test('image checks use headers only (no downloads), respect robots.txt and are s
   assert.equal(seen.some(([u]) => u.includes('private-img')), false);
   assert.ok(seen.filter(([u]) => u.endsWith('b.png')).every(([, max]) => max <= 1024));
 });
+
+test('a site whose home page has no crawlable links is still crawled through its sitemap (index + child sitemaps, own site only)', async () => {
+  const loc = p => `<url><loc>${BASE}${p}</loc></url>`;
+  const site = fakeSite({
+    '/robots.txt': { status: 200, type: 'text/plain', html: 'User-agent: *\nDisallow: /secret\nSitemap: ' + BASE + '/sitemap_index.xml\n' },
+    '/sitemap_index.xml': { status: 200, type: 'application/xml', html: `<sitemapindex><sitemap><loc>${BASE}/pages.xml</loc></sitemap><sitemap><loc>https://evil.example.org/x.xml</loc></sitemap></sitemapindex>` },
+    '/pages.xml': { status: 200, type: 'application/xml', html: `<urlset>${loc('/')}${loc('/services')}${loc('/contact')}${loc('/secret')}<url><loc>https://other.example.org/x</loc></url><url><loc>${BASE}/files/menu.pdf</loc></url></urlset>` },
+    '/': { status: 200, html: '<html lang="en"><head><title>A single page app shell with no links in it at all</title></head><body><div id="root"></div></body></html>' },
+    '/services': okPage('/services'), '/contact': okPage('/contact'), '/secret': okPage('/secret')
+  });
+  const c = new Crawl('s3', parseUserUrl(BASE + '/'), 50, { fetchUrl: site.fetchUrl, fetchFollow: site.fetchFollow, delayMs: 0 });
+  await c.run();
+  assert.equal(c.status, 'done');
+  const urls = c.results.map(r => r.url).sort();
+  assert.deepEqual(urls, [BASE + '/', BASE + '/contact', BASE + '/secret', BASE + '/services'].sort());
+  assert.equal(c.results.find(r => r.url === BASE + '/secret').blocked, true);          // robots.txt still wins
+  assert.equal(c.results.find(r => r.url === BASE + '/services').discoveredFrom, 'sitemap');
+  assert.equal(site.stats.requests.some(u => u.includes('evil.example.org') || u.includes('other.example.org')), false);
+  assert.ok(c.notes.some(n => /through the sitemap/.test(n)));
+  assert.equal(c.siteChecks.sitemap.urls, 6);
+});

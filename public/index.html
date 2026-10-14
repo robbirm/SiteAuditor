@@ -151,13 +151,27 @@ const statusB=p=>p.blocked?h('span',{className:'b notice'},'Blocked'):p.failed?h
 const linkB=l=>h('span',{className:'b '+(l.broken?'error':l.redirect?'notice':l.status?'ok':'notice')},l.statusText);
 const altB=i=>h('span',{className:'b '+({Missing:'warning',Empty:'notice',Present:'ok'})[i.altStatus]},i.altStatus);
 
+async function readError(res){ // a readable reason for a failed response, whatever the server sent back
+  let t='';try{t=await res.text()}catch(e){}
+  try{const j=JSON.parse(t);if(j&&j.error)return j.error}catch(e){}
+  if(res.status===401)return'You are signed out. Reload the page and log in again.';
+  if(res.status===502||res.status===503||res.status===504)return'The server is restarting or overloaded ('+res.status+'). Wait a few seconds and try again.';
+  const plain=t.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,140);
+  return'Request failed ('+res.status+')'+(plain?': '+plain:'');
+}
 async function api(path,opts){
   let res;
   try{res=await fetch(path,{credentials:'same-origin',...opts,headers:{'Content-Type':'application/json',...(opts&&opts.headers)}})}
   catch(e){throw new Error('Cannot reach the backend. Is the Node.js server running?')}
-  let data=null;try{data=await res.json()}catch(e){}
-  if(!res.ok)throw new Error((data&&data.error)||('Request failed ('+res.status+')'));
+  if(!res.ok)throw new Error(await readError(res));
+  let data;try{data=await res.json()}catch(e){throw new Error('The server sent something that is not JSON (HTTP '+res.status+', '+(res.headers.get('content-type')||'unknown type')+'). Open /api/diagnostics to check the server.')}
   return data;
+}
+async function saveFile(res,fallbackName){ // turns a fetch response into a browser download
+  const blob=await res.blob();
+  const m=/filename="([^"]+)"/.exec(res.headers.get('Content-Disposition')||'');
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=m?m[1]:fallbackName;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),10000);
 }
 function useDebounced(v,ms){const [x,setX]=useState(v);useEffect(()=>{const t=setTimeout(()=>setX(v),ms);return()=>clearTimeout(t)},[v,ms]);return x}
 function useList(section,crawlId,params,tick){
@@ -215,9 +229,19 @@ function Pager({off,total,set}){
     h('span',{className:'mut'},num(off+1)+'–'+num(Math.min(off+PAGE,total))+' of '+num(total)),
     d('tools',h('button',{className:'btn',disabled:off===0,onClick:()=>set(Math.max(0,off-PAGE))},'← Prev'),h('button',{className:'btn',disabled:off+PAGE>=total,onClick:()=>set(off+PAGE)},'Next →')));
 }
-function ExportBtn({crawlId,file,label,primary}){
+function ExportBtn({crawlId,file,label,primary}){ // downloads through fetch so a failure shows its real reason instead of raw JSON
+  const [busy,setBusy]=useState(false),[err,setErr]=useState('');
   const cls='btn'+(primary?' p':'');
-  return crawlId?h('a',{className:cls,href:'/api/crawls/'+crawlId+'/export/'+file+'.csv',download:''},label):h('button',{className:cls,disabled:true},label);
+  async function go(){
+    setBusy(true);setErr('');
+    try{
+      const res=await fetch('/api/crawls/'+crawlId+'/export/'+file+'.csv',{credentials:'same-origin'});
+      if(!res.ok)throw new Error(await readError(res));
+      await saveFile(res,'modernise-'+file+'.csv');
+    }catch(e){setErr(e.message==='Failed to fetch'?'Cannot reach the backend. Is the Node.js server running?':e.message)}
+    setBusy(false);
+  }
+  return h(React.Fragment,null,h('button',{className:cls,disabled:!crawlId||busy,onClick:go},busy?'Preparing…':label),err?d('banner err',{style:{margin:'6px 0 0',flexBasis:'100%'}},'Download failed: '+err):null);
 }
 
 /* ---------- PDF report + branding ---------- */
@@ -237,11 +261,8 @@ function ReportModal({crawlId,partial,onClose}){
     setBusy(true);setMsg('');setDone(false);
     try{
       const res=await fetch('/api/crawls/'+crawlId+'/report',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
-      if(!res.ok){let j=null;try{j=await res.json()}catch(x){}throw new Error((j&&j.error)||('The report could not be created ('+res.status+').'))}
-      const blob=await res.blob();
-      const m=/filename="([^"]+)"/.exec(res.headers.get('Content-Disposition')||'');
-      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=m?m[1]:'modernise-seo-report.pdf';document.body.appendChild(a);a.click();a.remove();
-      setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+      if(!res.ok)throw new Error(await readError(res));
+      await saveFile(res,'modernise-seo-report.pdf');
       lsSet(BRAND_KEY,remember?JSON.stringify(b):null);setDone(true);
     }catch(x){setMsg(x.message==='Failed to fetch'?'Cannot reach the backend. Is the Node.js server running?':x.message)}
     setBusy(false);

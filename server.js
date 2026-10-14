@@ -85,6 +85,14 @@ function find(req, res, next) {
 // ---- API ----
 app.get('/api/status', (req, res) => res.json({ live: true, defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT }));
 
+// Handy when something misbehaves on the host: open /api/diagnostics in the browser (login required) and read what the server sees.
+app.get('/api/diagnostics', (req, res) => {
+  let writable = false;
+  try { require('fs').accessSync(store.root, require('fs').constants.W_OK); writable = true; } catch { /* not writable */ }
+  res.json({ node: process.version, pid: process.pid, uptimeSeconds: Math.round(process.uptime()), dataDir: store.root, dataDirWritable: writable,
+    crawlsRunningInThisProcess: [...live.keys()], savedCrawls: store.list().map(m => ({ id: m.id, status: m.status, site: m.site, pages: m.pagesCrawled, phase: m.phase || '', message: m.message || '' })) });
+});
+
 app.post('/api/crawls', async (req, res, next) => {
   try {
     if (store.isBusy()) return res.status(409).json({ error: 'A crawl is already running. Cancel it or wait for it to finish.' });
@@ -155,7 +163,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large' });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
   console.error(err);
-  res.status(500).json({ error: 'Server error' });
+  res.status(500).json({ error: 'Server error: ' + String(err && err.message || err).slice(0, 200) });
 });
 
 process.on('unhandledRejection', e => console.error('Unhandled rejection:', e));
