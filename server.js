@@ -16,8 +16,9 @@ if (ADMIN_PASSWORD.length < 12) {
   console.error('ADMIN_PASSWORD must be set to at least 12 characters. Refusing to start.');
   process.exit(1);
 }
-const DEFAULT_LIMIT = 500, MAX_LIMIT = 1000, MAX_STORED = 5;
-const TTL_MS = (Number(process.env.RESULT_TTL_MINUTES) || 120) * 60000;
+const DEFAULT_LIMIT = 500, MAX_LIMIT = 1000;
+const MAX_STORED = Math.min(50, Math.max(1, Number(process.env.MAX_SAVED_CRAWLS) || 10)); // full results kept on disk
+const TTL_MS = (Number(process.env.RESULT_TTL_MINUTES) || 7 * 24 * 60) * 60000;           // default: 7 days (the history summary is kept longer)
 
 const app = express();
 app.disable('x-powered-by');
@@ -110,6 +111,21 @@ app.post('/api/crawls', async (req, res, next) => {
     crawl.run().catch(e => console.error(e)).finally(() => live.delete(crawl.id));
     res.status(201).json(crawl.progress());
   } catch (e) { next(e); }
+});
+
+// History of audits (summary only). Opening one works while its results are still saved.
+app.get('/api/history', (req, res) => res.json({ items: store.history(), keepsResultsFor: Math.round(TTL_MS / 60000), keepsLast: MAX_STORED }));
+app.post('/api/history/:id/delete', (req, res) => {
+  if (!store.removeHistory(req.params.id)) return res.status(409).json({ error: 'That audit is still running or could not be found.' });
+  res.json({ ok: true });
+});
+
+// One page's full details (used when you click an issue, link or image to see the page it belongs to)
+app.get('/api/crawls/:id/page', find, (req, res) => {
+  const url = String(req.query.url || '');
+  const page = req.view.analysis().pages.find(p => p.url === url);
+  if (!page) return res.status(404).json({ error: 'That page is not part of this audit.' });
+  res.json(page);
 });
 
 app.get('/api/crawls/:id', find, (req, res) => res.json(req.view.progress()));

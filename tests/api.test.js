@@ -173,3 +173,35 @@ test('diagnostics endpoint needs login and reports what the server sees', async 
   assert.match(j.node, /^v\d+/);
   assert.ok(Array.isArray(j.savedCrawls));
 });
+
+test('history lists finished audits; page details can be fetched for an issue; removing works', async () => {
+  const pages = hub(3);
+  pages['/'] = okPage('/', { links: [['/p0', 'P0']] });
+  pages['/p0'] = { status: 200, html: '<html><head></head><body>no title</body></html>' };
+  useSite(pages);
+  const { id } = await (await post('/api/crawls', { url: START })).json();
+  await waitFor(id, ['done']);
+
+  assert.equal((await fetch(base + '/api/history')).status, 401);
+  const h = await (await call('/api/history')).json();
+  const item = h.items.find(i => i.id === id);
+  assert.ok(item, 'the audit is in the history');
+  assert.equal(item.available, true); assert.equal(item.status, 'done'); assert.equal(typeof item.score, 'number');
+  assert.ok(item.pages >= 2); assert.ok(item.counts.critical >= 1);
+  assert.ok(h.keepsResultsFor > 0 && h.keepsLast >= 1);
+
+  const issue = (await (await call(`/api/crawls/${id}/issues?type=missing_title`)).json()).rows[0];
+  assert.ok(issue, 'a missing-title issue exists');
+  const pg = await call(`/api/crawls/${id}/page?url=${encodeURIComponent(issue.url)}`);
+  assert.equal(pg.status, 200);
+  const page = await pg.json();
+  assert.equal(page.url, issue.url); assert.ok(page.issues.some(i => i.type === 'missing_title'));
+  assert.equal((await call(`/api/crawls/${id}/page?url=${encodeURIComponent('https://elsewhere.example/')}`)).status, 404);
+  assert.equal((await call(`/api/crawls/${id}/page`)).status, 404);
+
+  assert.equal((await post('/api/history/not-an-id/delete')).status, 409);
+  assert.equal((await post(`/api/history/${id}/delete`, {}, { Origin: 'https://evil.example' })).status, 403);
+  assert.equal((await post(`/api/history/${id}/delete`)).status, 200);
+  assert.equal((await call(`/api/crawls/${id}`)).status, 404);           // saved results removed
+  assert.equal((await (await call('/api/history')).json()).items.some(i => i.id === id), false);
+});

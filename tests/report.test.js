@@ -170,3 +170,31 @@ test('a large crawl (1,000 pages with every kind of issue) stays fast and valid'
   assert.ok(ms < 3000, 'took ' + ms + ' ms');
   assert.ok(buf.length < 1.5e6, 'size ' + buf.length);
 });
+
+test('page addresses in the PDF are clickable links to the live pages (http/https only)', () => {
+  const v = sample();
+  const buf = buildReport(v, {});
+  assertValidPdf(buf);
+  const s = buf.toString('latin1');
+  const uris = [...s.matchAll(/\/URI \(([^)]*)\)/g)].map(m => m[1]);
+  assert.ok(uris.length >= 4, 'links: ' + uris.length);
+  assert.ok(uris.every(u => /^https:\/\/shop\.example\.com\//.test(u)), uris.join(' '));
+  assert.ok(uris.includes(U('/a')), 'a problem page is linked');
+  assert.ok(uris.includes(U('/i/2.jpg')), 'a large image is linked');
+  assert.match(s, /\/Annots \[\d+ 0 R/);
+  const annot = /<< \/Type \/Annot \/Subtype \/Link \/Rect \[([\d. -]+)\]/.exec(s);
+  const [x1, y1, x2, y2] = annot[1].split(' ').map(Number);
+  assert.ok(x2 > x1 && y2 > y1 && y1 >= 0 && y2 <= 842, 'rectangle is on the page: ' + annot[1]);
+  assert.match(pdfText(buf), /shop\.example\.com\/a/);
+});
+
+test('Pdf.link ignores unsafe addresses and escapes special characters', () => {
+  const { Pdf } = require('../lib/pdf');
+  const d = new Pdf(); d.addPage();
+  for (const bad of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,x', 'not a url', '', null, 'https://x.example/' + 'a'.repeat(2100)]) d.link(10, 10, 50, 10, bad);
+  d.link(10, 30, 50, 10, 'https://x.example/a(b)c?q=1&r=2');
+  const s = d.toBuffer().toString('latin1');
+  assert.equal((s.match(/\/Subtype \/Link/g) || []).length, 1);
+  assert.ok(s.includes('/URI (https://x.example/a\\(b\\)c?q=1&r=2)'));
+  assertValidPdf(d.toBuffer());
+});

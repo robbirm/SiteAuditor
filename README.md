@@ -52,6 +52,16 @@ Hosts such as Hostinger/LiteSpeed can run several Node processes and restart the
 and writes a heartbeat every second; any process can read them. Cancel works across processes (a flag file).
 If a process dies mid-crawl the crawl is shown as "interrupted" after ~20 s with the partial results.
 Folder: `DATA_DIR` env var, default `./data`, falling back to the system temp folder if that is not writable.
+Full results are kept for `RESULT_TTL_MINUTES` (default 7 days) and for the latest `MAX_SAVED_CRAWLS` audits (default 10, max 50); older ones are deleted automatically.
+
+## History
+Every finished audit also leaves a tiny summary file in `data/history/` (site, date, status, pages, score, critical/warning counts). The dashboard's **History** page lists them (newest first, up to 100):
+**Open** (while the full results still exist), **Run again** (pre-fills the address and page limit) and **Remove** (deletes the summary and any saved results).
+API: `GET /api/history`, `POST /api/history/:id/delete`.
+
+## Links to the pages that have problems
+Every page address in the dashboard is a link that opens the live page in a new tab. Clicking a row in Issues, Links or Images opens that page's details (all of its issues, with a button to open the page).
+`GET /api/crawls/:id/page?url=` returns one page's details. In the PDF report, the page addresses in "Pages needing attention", "Largest images" and the action-plan examples are clickable too.
 
 ## Notes
 - Finished crawls are kept for 2 hours (last 5). One crawl at a time. Max 2 simultaneous requests.

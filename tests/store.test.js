@@ -86,3 +86,37 @@ test('ids are validated: no path traversal, unknown ids return null', () => {
   const s = createStore(tmp());
   for (const id of ['../etc', '..', 'abc', ID(99), '', null, undefined, 'a'.repeat(24) + '/x']) assert.equal(s.get(id), null);
 });
+
+test('history: kept after the full results are cleaned up, shared between processes, newest first, removable', () => {
+  const { analyze } = require('../lib/analysis');
+  const dir = tmp(), a = createStore(dir), b = createStore(dir);
+  const mk = (n, t, status = 'done') => {
+    const c = fakeCrawl(ID(n), status);
+    c.startedAt = t; c.finishedAt = t + 1000; c.imageChecks = [];
+    c.analysis = () => analyze(c.results, c.links, c.images, c.imageChecks);
+    a.init(c); c.results.push(row(U('/'), { title: '' }), row(U('/x'))); a.flush(c); a.saveHistory(c);
+    return c;
+  };
+  const now = Date.now();
+  mk(1, now - 3 * 3600e3); mk(2, now - 1000);
+  let h = b.history();                                                   // another process sees both
+  assert.deepEqual(h.map(x => x.id), [ID(2), ID(1)]);
+  assert.equal(h[0].pages, 2); assert.equal(h[0].site, 'x.example.com'); assert.equal(h[0].available, true);
+  assert.equal(typeof h[0].score, 'number'); assert.ok(h[0].counts.critical >= 1); assert.ok(h[0].totals.issues >= 1);
+
+  a.evict(60 * 60e3, 10);                                                // the 3 hour old results go away...
+  h = b.history();
+  assert.equal(h.length, 2);                                             // ...but the history entry stays
+  assert.deepEqual(h.map(x => x.available), [true, false]);
+  assert.equal(b.get(ID(1)), null);
+
+  const live = fakeCrawl(ID(3), 'running'); a.init(live);               // a running audit shows up without a summary
+  h = b.history();
+  assert.equal(h[0].id, ID(3)); assert.equal(h[0].status, 'running'); assert.equal(h[0].score, null);
+  assert.equal(a.removeHistory(ID(3)), false);                           // running audits cannot be removed
+  assert.equal(a.removeHistory('../etc'), false);
+
+  assert.equal(a.removeHistory(ID(2)), true);
+  assert.equal(b.get(ID(2)), null);                                      // results removed too
+  assert.deepEqual(b.history().map(x => x.id).filter(i => i !== ID(3)), [ID(1)]);
+});

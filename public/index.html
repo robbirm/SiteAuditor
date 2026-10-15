@@ -118,6 +118,11 @@ tbody tr:hover{background:var(--hover)}tbody tr:hover td:first-child{box-shadow:
 .pg.l{justify-content:flex-start}.pg.c{justify-content:center}.pg.r{justify-content:flex-end}
 .pg img{max-height:26px;max-width:150px}.pg span{color:#667085;font-size:11px}
 @media (max-width:820px){.fgrid{grid-template-columns:1fr}.drop{flex-direction:column;align-items:flex-start}}
+a.url.ext{color:var(--blue);text-decoration:none}a.url.ext:hover{text-decoration:underline}
+a.url.ext::after{content:" \2197";font-size:11px;opacity:.55}
+a.live{flex:none;display:inline-grid;place-items:center;width:24px;height:24px;border-radius:8px;color:var(--blue);background:var(--blue-s);text-decoration:none;font-size:13px;margin-left:8px}
+a.live:hover{filter:brightness(.96);transform:translateY(-1px)}
+.hist td .btn{padding:6px 11px;font-size:13px;margin-right:6px}.hist .b{white-space:nowrap}
 summary{cursor:pointer;color:var(--blue);font-weight:550;margin-top:10px}
 @media (max-width:820px){
 .app{flex-direction:column}
@@ -143,7 +148,10 @@ const STATUS_LABEL={queued:'Queued',running:'Crawling',cancelling:'Cancelling',d
 const sevB=s=>h('span',{className:'b '+SC[s]},SL[s]||s);
 const short=(s,n)=>{s=String(s||'');return s.length>n?s.slice(0,n-1)+'…':s};
 const num=n=>n==null?'—':Number(n).toLocaleString();
-const mono=u=>h('span',{className:'url'},u);
+const isHttp=u=>/^https?:\/\//i.test(String(u||''));
+const stop=e=>e.stopPropagation();
+const mono=u=>isHttp(u)?h('a',{className:'url ext',href:u,target:'_blank',rel:'noopener noreferrer',title:'Open this page in a new tab',onClick:stop},u):h('span',{className:'url'},u);
+const liveLink=u=>isHttp(u)?h('a',{className:'live',href:u,target:'_blank',rel:'noopener noreferrer',title:'Open this page in a new tab','aria-label':'Open this page in a new tab',onClick:stop},'\u2197'):null;
 const dim=t=>h('span',{className:'mut'},t||'—');
 const lsGet=k=>{try{return localStorage.getItem(k)}catch(e){return null}};
 const lsSet=(k,v)=>{try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v)}catch(e){}};
@@ -311,7 +319,7 @@ function ListPage({section,crawlId,tick,ph,filters,cols,btns,onRow,init,sortable
     ...filters.map(f=>f.type==='select'
       ?d('tools',{key:f.name},h('select',{className:'q sel',value:fv[f.name],onChange:e=>setF(f.name,e.target.value)},h('option',{value:'all'},f.all),...f.opts.map(([v,l])=>h('option',{key:v,value:v},l))))
       :d('tools',{key:f.name},...f.opts.map(([v,l])=>h('button',{key:v,className:'chip'+(fv[f.name]===v?' on':''),onClick:()=>setF(f.name,v)},l)))),
-    s.err?d('banner err',s.err):d('mut',{style:{marginBottom:8}},s.loading&&!s.rows.length?'Loading…':num(s.total)+' results'),
+    s.err?d('banner err',s.err):d('mut',{style:{marginBottom:8}},s.loading&&!s.rows.length?'Loading…':num(s.total)+' results'+(onRow?' · click a row to see the page and all of its issues':'')),
     s.loading&&!s.rows.length?h(Skel):h(Tbl,{cols,rows:s.rows,onRow,sort:sortable?sort:null,setSort:sortable?setSort:null}),
     h(Pager,{off,total:s.total,set:setOff}));
 }
@@ -335,7 +343,7 @@ function Detail({p,onClose}){
       kv('Notes',p.note||null),
       h('h2',{style:{margin:'16px 0 6px'}},'Issues ('+p.issues.length+')'),
       ...(p.issues.length?p.issues.map((i,n)=>d('kvr',{key:'i'+n},d('kk',sevB(i.severity)),d('kvv',h('b',null,i.label),i.detail?d('mut',i.detail):null,d('mut','Fix: '+i.fix)))):[d('mut','No issues found on this page.')])),
-    d('tools',h('button',{className:'btn',onClick:onClose},'Close'))));
+    d('tools',isHttp(p.url)?h('a',{className:'btn p',href:p.url,target:'_blank',rel:'noopener noreferrer'},'Open page ↗'):null,h('button',{className:'btn',onClick:onClose},'Close'))));
 }
 
 /* ---------- views ---------- */
@@ -358,8 +366,39 @@ function Dashboard({pr,crawlId,tick,go,onRow}){
         h('details',null,h('summary',null,'How is this calculated?'),h('p',{className:'mut'},s.scoreModel.text),
           h('p',{className:'mut'},'Weights: Critical −'+W.critical+', Warning −'+W.warning+', Info −'+W.info+' (per distinct issue type, per page).'))),
       d('card',h('h2',null,'Pages needing attention'),
-        ...(attn.rows.length?attn.rows.map(p=>d('row',{key:p.url,style:{cursor:'pointer'},onClick:()=>onRow(p)},h('span',{className:'url t'},short(p.url.replace(/^https?:\/\//,''),64)),sevB(p.severity))):[d('mut',{style:{marginTop:8}},attn.loading?'Loading…':'No critical pages found.')]),
+        ...(attn.rows.length?attn.rows.map(p=>d('row',{key:p.url,style:{cursor:'pointer'},onClick:()=>onRow(p)},h('span',{className:'url t'},short(p.url.replace(/^https?:\/\//,''),64)),liveLink(p.url),sevB(p.severity))):[d('mut',{style:{marginTop:8}},attn.loading?'Loading…':'No critical pages found.')]),
         h('button',{className:'btn',style:{marginTop:10},onClick:()=>go('pages',{severity:'critical'})},'View all →'))));
+}
+
+function History({tick,currentId,onOpen,onRerun,onRemoved}){
+  const [s,setS]=useState({items:null,err:'',info:null}),[n,setN]=useState(0),[ask,setAsk]=useState(''),[err,setErr]=useState('');
+  useEffect(()=>{let dead=false;api('/api/history').then(r=>{if(!dead)setS({items:r.items,err:'',info:r})}).catch(e=>{if(!dead)setS(x=>({...x,err:e.message}))});return()=>{dead=true}},[tick,n]);
+  async function remove(it){
+    if(ask!==it.id){setAsk(it.id);return}
+    setErr('');
+    try{await api('/api/history/'+it.id+'/delete',{method:'POST'});setAsk('');onRemoved(it.id);setN(x=>x+1)}catch(e){setErr(e.message);setAsk('')}
+  }
+  const when=t=>{try{return t?new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'—'}catch(e){return'—'}};
+  const col=v=>v==null?null:v>=80?'var(--grn)':v>=60?'var(--amb)':'var(--red)';
+  const cols=[
+    {l:'Website',r:i=>h('div',null,h('b',null,i.site||i.startUrl),d('mut',{style:{fontSize:12}},i.id===currentId?'Currently open':short(i.startUrl,50)))},
+    {l:'Date',r:i=>when(i.startedAt)},
+    {l:'Result',r:i=>h('span',{className:'b '+(i.status==='done'?'ok':i.status==='error'?'error':'notice')},STATUS_LABEL[i.status]||i.status)},
+    {l:'Pages',r:i=>num(i.pages)},
+    {l:'Score',r:i=>i.score==null?dim():h('b',{style:{color:col(i.score)}},i.score+'/100')},
+    {l:'Critical',r:i=>i.counts?h('span',{className:i.counts.critical?'b error':'mut'},i.counts.critical):dim()},
+    {l:'Warnings',r:i=>i.counts?h('span',{className:i.counts.warning?'b warning':'mut'},i.counts.warning):dim()},
+    {l:'',r:i=>h('div',{style:{whiteSpace:'nowrap'}},
+      i.available?h('button',{className:'btn',onClick:()=>onOpen(i.id)},i.id===currentId?'View':'Open'):h('span',{className:'mut',title:'The full results were cleaned up to save space. Run the audit again to see the pages.',style:{marginRight:8}},'Results expired'),
+      h('button',{className:'btn',onClick:()=>onRerun(i)},'Run again'),
+      h('button',{className:'btn',onClick:()=>remove(i),onBlur:()=>setAsk(''),style:ask===i.id?{color:'var(--red)',borderColor:'var(--red)'}:null},ask===i.id?'Click to confirm':'Remove'))}];
+  if(s.err&&!s.items)return d('banner err',s.err);
+  if(!s.items)return h(Skel);
+  const days=s.info?Math.max(1,Math.round(s.info.keepsResultsFor/1440)):7;
+  return h(React.Fragment,null,
+    err?d('banner err',err):null,
+    d('mut',{style:{marginBottom:10}},'Every audit you run is listed here. Full results are kept for about '+days+' day'+(days===1?'':'s')+' (your latest '+(s.info?s.info.keepsLast:10)+' audits); after that the summary stays and you can run the audit again.'),
+    s.items.length?d('hist',h(Tbl,{cols,rows:s.items})):Empty('No audits yet. Your audits will appear here so you can come back to them.'));
 }
 
 function Exports({crawlId,s,canReport,onReport}){
@@ -388,10 +427,10 @@ const imgHttp=i=>i.imgStatus==null?dim():h('span',{className:'b '+(i.imgStatus>=
 const IMAGE_COLS=[{l:'Image',r:i=>mono(i.src)},{l:'Source page',r:i=>mono(i.page)},{l:'ALT status',r:altB},{l:'ALT text',r:i=>i.alt?short(i.alt,80):dim()},{l:'Size',r:kb},{l:'HTTP',r:imgHttp}];
 
 /* ---------- app ---------- */
-const NAV=[['dash','Dashboard','◧'],['pages','All Pages','▤'],['issues','Issues','⚠'],['links','Links','⛓'],['images','Images','▣'],['exports','Exports','⇩']];
+const NAV=[['dash','Dashboard','◧'],['pages','All Pages','▤'],['issues','Issues','⚠'],['links','Links','⛓'],['images','Images','▣'],['exports','Exports','⇩'],['history','History','◷']];
 function App(){
   const [view,setView]=useState('dash'),[init,setInit]=useState(null),[url,setUrl]=useState(''),[limit,setLimit]=useState(500),[max,setMax]=useState(1000);
-  const [backend,setBackend]=useState('checking'),[crawlId,setCrawlId]=useState(null),[pr,setPr]=useState(null),[err,setErr]=useState(''),[detail,setDetail]=useState(null),[showRep,setShowRep]=useState(false);
+  const [backend,setBackend]=useState('checking'),[crawlId,setCrawlId]=useState(null),[pr,setPr]=useState(null),[err,setErr]=useState(''),[detail,setDetail]=useState(null),[showRep,setShowRep]=useState(false),[ready,setReady]=useState('');
   const [theme,setTheme]=useState(()=>{try{return matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}catch(e){return'light'}});
   useEffect(()=>{document.documentElement.setAttribute('data-theme',theme)},[theme]);
 
@@ -416,15 +455,20 @@ function App(){
   const go=(v,i)=>{setView(v);setInit(i||null)};
   async function start(){
     setErr('');
+    setReady('');
     try{const p=await api('/api/crawls',{method:'POST',body:JSON.stringify({url:url.trim(),limit:Number(limit)||undefined})});setCrawlId(p.id);setPr(p);lsSet('msa_crawl',p.id);go('dash')}
     catch(e){setErr(e.message)}
   }
+  async function openPage(u){setErr('');try{setDetail(await api('/api/crawls/'+crawlId+'/page?url='+encodeURIComponent(u)))}catch(e){setErr(e.message)}}
+  async function openCrawl(id){setErr('');try{const p=await api('/api/crawls/'+id);setCrawlId(id);setPr(p);setUrl(p.startUrl);setLimit(p.limit);lsSet('msa_crawl',id);go('dash')}catch(e){setErr(e.message)}}
+  function rerun(it){setErr('');setReady(it.site||it.startUrl);setUrl(it.startUrl);if(it.limit)setLimit(it.limit);go('dash')}
+  function removed(id){if(id===crawlId){setCrawlId(null);setPr(null);lsSet('msa_crawl',null)}}
   async function cancel(){try{setPr(await api('/api/crawls/'+crawlId+'/cancel',{method:'POST'}))}catch(e){setErr(e.message)}}
 
   const s=pr&&pr.summary,tick=pr?pr.pagesCrawled+':'+pr.status+':'+s.totals.pages:'';
   const stat=(l,v,c,ico)=>d('card stat',{style:{'--accent':c||'var(--blue)'}},d('statTop',d('l',l),d('ico',ico)),d('v',{style:c?{color:c}:null},v));
   const scoreColor=!s||s.score==null?null:s.score>=80?'var(--grn)':s.score>=60?'var(--amb)':'var(--red)';
-  const T=({dash:'Dashboard',pages:'All Pages',issues:'Issues',links:'Links',images:'Images',exports:'Exports'})[view];
+  const T=({dash:'Dashboard',pages:'All Pages',issues:'Issues',links:'Links',images:'Images',exports:'Exports',history:'History'})[view];
   const cnt=s?{pages:s.totals.pages,issues:s.totals.issues,links:s.totals.links,images:s.totals.images}:{};
   const vk=view+JSON.stringify(init);
   const common={crawlId,tick,onRow:setDetail,init};
@@ -436,6 +480,7 @@ function App(){
       d('top',h('div',null,h('h1',null,T),d('mut',active?h('span',{className:'dot'}):null,pr?pr.startUrl+' · '+(STATUS_LABEL[pr.status]||pr.status):'No audit run yet')),h(ReportBtn,{canReport,onOpen:()=>setShowRep(true)})),
       backend==='down'?d('banner err','Backend not connected. Start the Node.js server (npm run dev) and open this page from it. No sample data is shown.'):null,
       err?d('banner err',err):null,
+      ready&&!active?d('banner',{style:{background:'var(--blue-s)',color:'var(--blue)'}},'Ready to run '+ready+' again. Press Start Audit.'):null,
       d('card audit',
         h('input',{value:url,onChange:e=>setUrl(e.target.value),onKeyDown:e=>{if(e.key==='Enter'&&!active&&backend==='ok'&&url.trim())start()},placeholder:'https://yourwebsite.com','aria-label':'Website URL'}),
         h('input',{className:'lim',type:'number',min:1,max:max,value:limit,onChange:e=>setLimit(e.target.value),title:'Page limit (max '+max+')','aria-label':'Page limit'}),
@@ -449,16 +494,17 @@ function App(){
       view==='pages'&&h(ListPage,{...common,key:vk,section:'pages',ph:'Search URLs, titles, descriptions, headings…',sortable:true,cols:PAGES_COLS,
         btns:[h(ExportBtn,{key:'e',crawlId,file:'pages',label:'Export All Pages CSV'})],
         filters:[{name:'status',type:'chips',opts:[['all','All'],['2xx','2xx OK'],['3xx','3xx Redirects'],['4xx','4xx Errors'],['5xx','5xx Errors'],['issues','With issues']]},{name:'severity',type:'chips',opts:[['all','Any severity'],['critical','Critical'],['warning','Warning'],['info','Info']]}]}),
-      view==='issues'&&h(ListPage,{...common,key:vk,section:'issues',ph:'Search issues or URLs…',cols:ISSUE_COLS,onRow:null,
+      view==='issues'&&h(ListPage,{...common,key:vk,section:'issues',ph:'Search issues or URLs…',cols:ISSUE_COLS,onRow:i=>openPage(i.url),
         btns:[h(ExportBtn,{key:'e',crawlId,file:'issues',label:'Export All Issues CSV'})],
         filters:[{name:'severity',type:'chips',opts:[['all','All'],['critical','Critical'],['warning','Warnings'],['info','Information']]},{name:'type',type:'select',all:'All issue types',opts:s?s.issueTypes.map(t=>[t.type,t.label+' ('+t.count+')']):[]}]}),
-      view==='links'&&h(ListPage,{...common,key:vk,section:'links',ph:'Search source, destination or anchor text…',cols:LINK_COLS,onRow:null,
+      view==='links'&&h(ListPage,{...common,key:vk,section:'links',ph:'Search source, destination or anchor text…',cols:LINK_COLS,onRow:l=>openPage(l.source),
         btns:[h(ExportBtn,{key:'e',crawlId,file:'links',label:'Export All Links CSV'}),h(ExportBtn,{key:'b',crawlId,file:'broken-links',label:'Export Broken Links CSV'})],
         filters:[{name:'filter',type:'chips',opts:[['all','All'],['broken','Broken'],['redirect','Redirects'],['internal','Internal'],['external','External']]}]}),
-      view==='images'&&h(ListPage,{...common,key:vk,section:'images',ph:'Search image URL, page or ALT text…',cols:IMAGE_COLS,onRow:null,
+      view==='images'&&h(ListPage,{...common,key:vk,section:'images',ph:'Search image URL, page or ALT text…',cols:IMAGE_COLS,onRow:i=>openPage(i.page),
         btns:[h(ExportBtn,{key:'e',crawlId,file:'images',label:'Export Images CSV'})],
         filters:[{name:'filter',type:'chips',opts:[['all','All'],['missing','Missing ALT'],['empty','Empty ALT'],['present','Has ALT'],['oversized','Over 250 KB'],['broken','Broken']]}]}),
-      view==='exports'&&h(Exports,{crawlId,s,canReport,onReport:()=>setShowRep(true)}))),
+      view==='exports'&&h(Exports,{crawlId,s,canReport,onReport:()=>setShowRep(true)}),
+      view==='history'&&h(History,{tick:crawlId+':'+status,currentId:crawlId,onOpen:openCrawl,onRerun:rerun,onRemoved:removed}))),
     detail?h(Detail,{p:detail,onClose:()=>setDetail(null)}):null,
     showRep?h(ReportModal,{crawlId,partial:status==='cancelled'||status==='error',onClose:()=>setShowRep(false)}):null);
 }
