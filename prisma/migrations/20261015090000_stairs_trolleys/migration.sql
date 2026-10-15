@@ -1,0 +1,6 @@
+-- AlterEnum
+ALTER TYPE "RoomType" ADD VALUE 'STAIRS';
+ALTER TYPE "RoomType" ADD VALUE 'LIFT';
+
+-- AlterEnum
+ALTER TYPE "AssetType" ADD VALUE 'TROLLEY';

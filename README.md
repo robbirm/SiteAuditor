@@ -1,59 +1,126 @@
-# Modernise Site Auditor
+# SchoolVerse
 
-Private Node.js + Express + Cheerio SEO crawler with the Modernise dashboard (`public/index.html`).
+Interactive IT management for schools and IT support companies: map buildings, rooms, devices and network infrastructure, manage equipment, track faults and simulate outages.
 
-## Run locally
-1. Install Node.js 20 or newer.  2. `npm install`  3. Copy `.env.example` to `.env`, set `ADMIN_PASSWORD` (12+ chars).
-4. `npm run dev` and open http://localhost:3000 (browser asks for the username and password).
-5. `npm test` runs the automated tests (see below).
+**Status: Phase 1 of 6** — foundation, authentication, organisations & roles, school management, buildings/floors/rooms and a live dashboard. See the [roadmap](#roadmap).
 
-## What it checks
-Critical: 404/4xx/5xx pages, pages that fail to load, broken internal links, missing title, redirect loops, redirects to error pages.
-Also Critical: broken images (image URL returns an error).
-Warning: missing/duplicate meta description, duplicate title, missing/multiple H1, redirect chains (2+ hops), canonical pointing to a non-200 URL, noindex (meta robots or X-Robots-Tag), images missing ALT, oversized images (over 250 KB), title too long, missing mobile viewport tag, slow response, page served over HTTP.
-Info: single redirects, missing canonical, canonical pointing to a different URL, URLs blocked by robots.txt, short title, too short/long meta description, thin content, missing `lang`.
-Site-level checks: robots.txt present, sitemap found, HTTPS in use.
-Image sizes are measured with a capped request per image (at most `IMAGE_CHECK_LIMIT` images, default 150, same 2-request limit). Images that send no Content-Length show as 'Unknown'.
-(`alt=""` is treated as intentionally decorative, not an error.)
+## Stack
 
-## Health score (how it is calculated)
-Every crawled page starts at 100. For each distinct issue type on the page subtract 25 (Critical), 10 (Warning) or 2 (Info), minimum 0.
-A page returning 4xx/5xx or failing to load scores 0. The site score is the average page score over all crawled pages
-(robots.txt-blocked pages excluded), rounded. The same text is shown in the dashboard ("How is this calculated?") and comes from `lib/analysis.js`.
+| Concern | Choice |
+| --- | --- |
+| Framework | Next.js 15 (App Router, Server Components, Server Actions), React 19, TypeScript |
+| Styling | Tailwind CSS 3, Radix primitives, Lucide icons, Framer Motion, next-themes |
+| Data | PostgreSQL + Prisma ORM, committed SQL migrations |
+| Auth | Custom, server-side sessions (bcrypt passwords, HMAC-hashed session tokens, httpOnly cookies) |
+| Validation | Zod on every server action |
+| Hosting | Render (web service + managed PostgreSQL) via `render.yaml` |
 
-## API (all require HTTP Basic auth except /healthz)
-- `GET /api/status`
-- `POST /api/crawls {url, limit}` (limit default 500, max 1000)  |  `GET /api/crawls/:id` (progress + summary)  |  `POST /api/crawls/:id/cancel`
-- `GET /api/crawls/:id/{pages|issues|links|images}?q=&offset=&limit=` plus filters: pages `status=2xx|3xx|4xx|5xx|issues`, `severity`, `sort`, `dir`;
-  issues `severity`, `type`; links `filter=broken|redirect|internal|external`; images `filter=missing|empty|present|oversized|broken`
-  (this replaces the earlier `/pages` response shape: rows are now in `rows`)
-- `POST /api/crawls/:id/report` (JSON body, optional branding) returns a PDF. Only allowed once the crawl is done/cancelled/error (409 otherwise). This route alone accepts a 2.6 MB body.
-- `GET /api/crawls/:id/export/{pages|issues|links|broken-links|images}.csv` always exports ALL records.
+The floor builder is a hand-built isometric SVG renderer (`src/components/map`) — no canvas library needed, server-renderable previews, crisp at any zoom. Later phases add React Flow (network diagrams), S3-compatible private storage, QR generation and CSV/PDF export.
 
-## If something misbehaves on the host
-Open `/api/diagnostics` (after logging in). It shows the Node version, the data folder and whether it is writable, which crawls are saved and their status/message.
-The dashboard shows the real reason when a download or request fails (it no longer shows raw JSON). Pages listed in `sitemap.xml` (and its child sitemaps) are crawled as well, so sites whose menus are built with JavaScript are not stuck on one page.
+## Run it locally
 
-## PDF report
-`POST /api/crawls/:id/report` with `{company, client, accent:'#rrggbb', logoAlign:'left|center|right', logo:'data:image/png|jpeg;base64,...'}` (all optional; logo max 1.5 MB, PNG or JPG only).
-The PDF has an overview with the health score, what is good / needs improvement / critical, charts (issue severity, score distribution, status codes, ALT coverage, response times), image and speed checks, a top-issues table and a prioritised action plan.
-The logo is printed in the footer of every page. The PDF is built by a small dependency-free writer (`lib/pdf.js`, `lib/report.js`), so there is nothing extra to install. The dashboard's 'Download PDF report' button opens a branding panel that remembers settings in the browser.
+Prerequisites: Node.js 20.11+ and PostgreSQL 14+.
 
-## CSV
-UTF-8 with BOM and CRLF (opens correctly in Excel). Cells starting with `= + - @` are prefixed with `'` to prevent formula injection.
+```bash
+# 1. Create a database and user (adjust to taste)
+psql -U postgres -c "CREATE USER schoolverse WITH PASSWORD 'schoolverse' CREATEDB;"
+psql -U postgres -c "CREATE DATABASE schoolverse OWNER schoolverse;"
 
-## Tests (`npm test`, Node's built-in runner, no network needed)
-`store` (disk storage, second-process reads, interruption, cleanup), `analysis` (SEO rules and score), `csv` (all five exports, all rows, injection), `safeUrl` (SSRF blocking), `crawler` (discovery, limit,
-2-request concurrency, cancellation, robots.txt), `site` (messy fixture website end to end), `api` (login, validation, progress, filters, exports, cancel, 409, limit clamp, PDF report), `pdf` and `report` (PDF structure, logos, branding, content).
+# 2. Install and configure
+npm install
+cp .env.example .env
+# edit .env: set AUTH_SECRET to a long random string:
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
-## Storage (important on shared hosting)
-Hosts such as Hostinger/LiteSpeed can run several Node processes and restart them, so crawl results are saved to disk
-(`lib/store.js`), not kept in one process's memory. The process running a crawl appends results to `data/<id>/*.jsonl`
-and writes a heartbeat every second; any process can read them. Cancel works across processes (a flag file).
-If a process dies mid-crawl the crawl is shown as "interrupted" after ~20 s with the partial results.
-Folder: `DATA_DIR` env var, default `./data`, falling back to the system temp folder if that is not writable.
+# 3. Create the schema and load the demo school
+npx prisma migrate deploy
+npm run db:seed
 
-## Notes
-- Finished crawls are kept for 2 hours (last 5). One crawl at a time. Max 2 simultaneous requests.
-- The page limit counts every URL fetched; images, PDFs and similar files are never queued.
-- External links are listed but not checked. Links to URLs beyond the page limit show "Not crawled".
+# 4. Start
+npm run dev
+```
+
+Open http://localhost:3000, then either **Create a free workspace** or **Explore the demo school**.
+
+Useful scripts:
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Development server |
+| `npm run build` / `npm start` | Production build / server |
+| `npm run typecheck` | TypeScript check |
+| `npm run db:migrate` | Create a new migration after editing `prisma/schema.prisma` |
+| `npm run db:deploy` | Apply committed migrations |
+| `npm run db:seed` | Rebuild the demo workspace (touches demo data only) |
+
+`npm run build` also applies migrations and loads the demo, so hosts that only run build + start (e.g. Hostinger) are set up automatically. If anything is misconfigured, open `/api/health` — it lists what's wrong without revealing secrets.
+| `npm run db:studio` | Browse the database |
+| `npm run user:reset-link -- email` | Print a one-time password reset link (account recovery without email) |
+
+## Deploy to Render
+
+1. Push this repository to GitHub.
+2. In Render choose **New → Blueprint** and select the repo. `render.yaml` creates a PostgreSQL database and a Node web service, wires `DATABASE_URL`, and generates `AUTH_SECRET`.
+3. Set `APP_URL` to the service's public URL (e.g. `https://schoolverse.onrender.com`) — it's used for invitation and QR links.
+4. Deploy. The start command runs `prisma migrate deploy` before starting Next.js, so migrations apply automatically on every release. `/api/health` is the health check.
+5. Load the demo once from the service's **Shell** tab: `npm run db:seed`.
+
+Environment variables are documented in `.env.example`.
+
+## Email (password resets and invitations)
+
+SchoolVerse sends two emails: password reset links (single use, 30 minutes) and team invitations (7 days). It uses [Resend](https://resend.com)'s HTTP API; SMTP works as a fallback.
+
+1. Create a Resend account and verify a sending domain (a subdomain such as `mail.yourdomain.co.uk` is recommended).
+2. Add the DNS records Resend shows you (MX and TXT on `send.<subdomain>`, TXT on `resend._domainkey.<subdomain>`), then click **Verify**.
+3. Create an API key with sending access.
+4. Set `RESEND_API_KEY` and `EMAIL_FROM` (an address on the verified domain) in the host's environment variables and redeploy.
+5. Open `/api/health`: `emailProvider` should say `resend`.
+
+Without email configured, admins can still create reset links (Team page) and copy invitation links by hand.
+
+## Architecture
+
+```
+prisma/
+  schema.prisma          Data model for all phases (tenancy, estate, assets, faults, network, simulation, audit)
+  migrations/            Committed SQL migrations
+  seed.ts                Fictional demo workspace
+src/
+  middleware.ts          Edge redirect for signed-out visitors (UX only; not a security boundary)
+  actions/               Server actions — every one validates input and calls authorize()
+  app/
+    page.tsx             Public landing page
+    (auth)/              Login, registration
+    (app)/               Authenticated app: dashboard, schools, team
+    invite/[token]/      Accept invitations
+    api/health/          Health check
+  components/            UI (ui/ primitives, app shell, dashboard, schools, team)
+  lib/
+    auth/                Sessions, password hashing, RBAC matrix, request auth context
+    tenant.ts            Organisation-scoped lookups
+    stats.ts             Live dashboard queries
+    validation.ts        Zod schemas
+```
+
+### Security model
+
+- **Authentication.** Passwords are hashed with bcrypt (cost 12). Sessions are random 256-bit tokens; the database stores only an HMAC-SHA256 of each token keyed by `AUTH_SECRET`, so a database leak can't be replayed. Cookies are `httpOnly`, `SameSite=Lax` and `Secure` in production. Sign-in and sign-up are rate-limited, and unknown emails take the same time to reject as wrong passwords.
+- **Tenancy.** Every customer record belongs to an organisation. Server code never loads tenant data by id alone: lookups go through `src/lib/tenant.ts` (or include `organisationId` in the `where`), so an id from another workspace resolves to "not found".
+- **Authorisation.** `src/lib/auth/rbac.ts` holds the permission matrix (Owner, Admin, Technician, Viewer). Every server action calls `authorize(permission)`, which re-reads the user's membership on each request — removing someone takes effect immediately. Admins can't create, demote or remove owners; a workspace always keeps one owner.
+- **Demo.** Visitors share a read-only Viewer account in an isolated demo organisation that can't sign in with a password.
+- **Audit.** Significant changes are written to `AuditLog` and shown in the dashboard's activity feed.
+- **Headers.** `X-Frame-Options: DENY`, `nosniff`, a strict referrer policy and a narrowed permissions policy are sent on every response. Server Actions get Next.js's built-in Origin check against CSRF.
+
+## Roadmap
+
+| Phase | Scope | Status |
+| --- | --- | --- |
+| 1 | Architecture, auth, organisations & roles, invitations, schools, buildings/floors/rooms, live dashboard, demo seed, Render deployment | **Done** |
+| 2 | Asset register: CRUD, search & filters, moves, CSV template/import/export, server cabinets with rack positions, photos (private storage) | All done except photos |
+| 3 | Interactive floor plans: 3D (isometric) floor builder, drag/resize rooms, equipment on floors, cable runs (Cat5e/6/6a/7, fibre SM/MM, coax) with lengths, Wi-Fi access points with coverage, cabinets with rack views, layer toggles, uploaded plan images | All done except plan image upload |
+| 4 | QR labels, scan-to-record, faults & maintenance workflows | |
+| 5 | Network diagrams (React Flow) and the What Breaks If? simulator | |
+| 6 | Reports (assets, warranties, faults, infrastructure, simulations) and polish | |
+
+The schema already contains the tables later phases use, so they add features without reshaping existing data.
