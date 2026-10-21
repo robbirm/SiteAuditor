@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Shows the "Donate with PayPal" buttons inside the app.
+      Google Play has removed apps that link to outside donation pages, so set this to
+      false for builds you upload to Google Play (the website version keeps its button).
+    -->
+    <bool name="show_donate_button">true</bool>
+</resources>
