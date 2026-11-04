@@ -10,12 +10,6 @@ const { createStore, pickDir } = require('./lib/store');
 const { buildReport, PdfError } = require('./lib/report');
 
 const PORT = process.env.PORT || 3000;
-const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-if (ADMIN_PASSWORD.length < 12) {
-  console.error('ADMIN_PASSWORD must be set to at least 12 characters. Refusing to start.');
-  process.exit(1);
-}
 const DEFAULT_LIMIT = 500, MAX_LIMIT = 1000;
 const MAX_STORED = Math.min(50, Math.max(1, Number(process.env.MAX_SAVED_CRAWLS) || 10)); // full results kept on disk
 const TTL_MS = (Number(process.env.RESULT_TTL_MINUTES) || 7 * 24 * 60) * 60000;           // default: 7 days (the history summary is kept longer)
@@ -31,28 +25,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---- Private access: HTTP Basic auth on everything (UI and API) ----
-const digest = s => crypto.createHash('sha256').update(String(s)).digest();
-const failures = new Map(); // ip -> { n, reset }
-function auth(req, res, next) {
-  const f = failures.get(req.ip);
-  if (f && f.n >= 10 && Date.now() < f.reset) return res.status(429).type('text').send('Too many failed attempts. Try again later.');
-  const m = /^Basic (.+)$/i.exec(req.headers.authorization || '');
-  if (m) {
-    const decoded = Buffer.from(m[1], 'base64').toString('utf8');
-    const i = decoded.indexOf(':');
-    const user = i < 0 ? decoded : decoded.slice(0, i), pass = i < 0 ? '' : decoded.slice(i + 1);
-    const okUser = crypto.timingSafeEqual(digest(user), digest(ADMIN_USER));
-    const okPass = crypto.timingSafeEqual(digest(pass), digest(ADMIN_PASSWORD));
-    if (okUser && okPass) return next();
-    const live = f && Date.now() < f.reset;
-    failures.set(req.ip, { n: (live ? f.n : 0) + 1, reset: live ? f.reset : Date.now() + 15 * 60000 });
-  }
-  res.set('WWW-Authenticate', 'Basic realm="Modernise Site Auditor", charset="UTF-8"').status(401).type('text').send('Authentication required');
-}
-app.use(auth);
-
-// Block cross-site state-changing requests (browsers cache Basic credentials).
+// Block cross-site state-changing requests.
 app.use((req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   const origin = req.headers.origin;

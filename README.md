@@ -3,8 +3,8 @@
 Private Node.js + Express + Cheerio SEO crawler with the Modernise dashboard (`public/index.html`).
 
 ## Run locally
-1. Install Node.js 20 or newer.  2. `npm install`  3. Copy `.env.example` to `.env`, set `ADMIN_PASSWORD` (12+ chars).
-4. `npm run dev` and open http://localhost:3000 (browser asks for the username and password).
+1. Install Node.js 20 or newer.  2. `npm install`  3. Optionally copy `.env.example` to `.env` to change settings.
+4. `npm run dev` and open http://localhost:3000. There is no sign-in: anyone who can reach the address can use the dashboard.
 5. `npm test` runs the automated tests (see below).
 
 ## What it checks
@@ -21,7 +21,7 @@ Every crawled page starts at 100. For each distinct issue type on the page subtr
 A page returning 4xx/5xx or failing to load scores 0. The site score is the average page score over all crawled pages
 (robots.txt-blocked pages excluded), rounded. The same text is shown in the dashboard ("How is this calculated?") and comes from `lib/analysis.js`.
 
-## API (all require HTTP Basic auth except /healthz)
+## API (no sign-in required)
 - `GET /api/status`
 - `POST /api/crawls {url, limit}` (limit default 500, max 1000)  |  `GET /api/crawls/:id` (progress + summary)  |  `POST /api/crawls/:id/cancel`
 - `GET /api/crawls/:id/{pages|issues|links|images}?q=&offset=&limit=` plus filters: pages `status=2xx|3xx|4xx|5xx|issues`, `severity`, `sort`, `dir`;
@@ -31,7 +31,7 @@ A page returning 4xx/5xx or failing to load scores 0. The site score is the aver
 - `GET /api/crawls/:id/export/{pages|issues|links|broken-links|images}.csv` always exports ALL records.
 
 ## If something misbehaves on the host
-Open `/api/diagnostics` (after logging in). It shows the Node version, the data folder and whether it is writable, which crawls are saved and their status/message.
+Open `/api/diagnostics`. It shows the Node version, the data folder and whether it is writable, which crawls are saved and their status/message.
 The dashboard shows the real reason when a download or request fails (it no longer shows raw JSON). Pages listed in `sitemap.xml` (and its child sitemaps) are crawled as well, so sites whose menus are built with JavaScript are not stuck on one page.
 
 ## PDF report

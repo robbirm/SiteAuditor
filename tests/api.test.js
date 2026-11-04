@@ -1,8 +1,6 @@
 'use strict';
 process.env.NODE_ENV = 'test';
 process.env.DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'msa-api-'));
-process.env.ADMIN_USER = 'admin';
-process.env.ADMIN_PASSWORD = 'test-password-123';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { app } = require('../server');
@@ -13,8 +11,7 @@ const server = app.listen(0);
 base = 'http://127.0.0.1:' + server.address().port;
 test.after(() => { server.closeAllConnections && server.closeAllConnections(); server.close(); });
 
-const AUTH = { Authorization: 'Basic ' + Buffer.from('admin:test-password-123').toString('base64') };
-const call = (path, o = {}) => fetch(base + path, { ...o, headers: { ...AUTH, 'Content-Type': 'application/json', ...(o.headers || {}) } });
+const call = (path, o = {}) => fetch(base + path, { ...o, headers: { 'Content-Type': 'application/json', ...(o.headers || {}) } });
 const post = (path, body, headers) => call(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body), headers });
 const START = 'http://93.184.216.34/';
 const hub = (n, extra = []) => { const p = { '/': okPage('/', { links: [...Array.from({ length: n }, (_, i) => ['/p' + i, 'P' + i]), ...extra] }) }; for (let i = 0; i < n; i++) p['/p' + i] = okPage('/p' + i); return p; };
@@ -28,12 +25,9 @@ async function waitFor(id, wanted) {
 }
 const useSite = (pages, o) => { const s = fakeSite(pages, o); app.locals.crawlOptions = { fetchUrl: s.fetchUrl, fetchFollow: s.fetchFollow, delayMs: 0 }; return s; };
 
-test('authentication is required for the UI and API; /healthz is open', async () => {
+test('no sign-in is needed for the UI and API; /healthz is open', async () => {
   assert.equal((await fetch(base + '/healthz')).status, 200);
-  for (const p of ['/', '/api/status', '/api/crawls/abc']) assert.equal((await fetch(base + p)).status, 401, p);
-  const bad = await fetch(base + '/api/status', { headers: { Authorization: 'Basic ' + Buffer.from('admin:wrong').toString('base64') } });
-  assert.equal(bad.status, 401);
-  assert.equal((await call('/api/status')).status, 200);
+  for (const p of ['/', '/api/status']) assert.equal((await fetch(base + p)).status, 200, p);
 });
 
 test('unsafe or invalid URLs are rejected before any request is made', async () => {
@@ -163,9 +157,7 @@ test('a report cannot be requested while the crawl is still running', async () =
   assert.equal((await post(`/api/crawls/${id}/report`, {})).status, 200);                               // a stopped crawl can still be reported (partial)
 });
 
-test('diagnostics endpoint needs login and reports what the server sees', async () => {
-  const anon = await fetch(base + '/api/diagnostics');
-  assert.equal(anon.status, 401);
+test('diagnostics endpoint reports what the server sees', async () => {
   const r = await call('/api/diagnostics');
   assert.equal(r.status, 200);
   const j = await r.json();
@@ -182,7 +174,6 @@ test('history lists finished audits; page details can be fetched for an issue; r
   const { id } = await (await post('/api/crawls', { url: START })).json();
   await waitFor(id, ['done']);
 
-  assert.equal((await fetch(base + '/api/history')).status, 401);
   const h = await (await call('/api/history')).json();
   const item = h.items.find(i => i.id === id);
   assert.ok(item, 'the audit is in the history');
