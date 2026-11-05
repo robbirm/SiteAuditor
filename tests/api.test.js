@@ -196,3 +196,20 @@ test('history lists finished audits; page details can be fetched for an issue; r
   assert.equal((await call(`/api/crawls/${id}`)).status, 404);           // saved results removed
   assert.equal((await (await call('/api/history')).json()).items.some(i => i.id === id), false);
 });
+
+test('a crawl saved by a stopping server process is carried on by the next request and finishes', async () => {
+  const { live, resumeStalled } = require('../server');
+  const site = useSite(hub(40), { latency: 20 });
+  const { id } = await (await post('/api/crawls', { url: START, limit: 100 })).json();
+  for (let i = 0; i < 200 && !(live.get(id) && live.get(id).completed >= 5); i++) await new Promise(r => setTimeout(r, 10));
+  const old = live.get(id);
+  old.pause();                                                    // what SIGTERM does
+  for (let i = 0; i < 100 && live.has(id); i++) await new Promise(r => setTimeout(r, 10));
+  const mid = await (await call('/api/crawls/' + id)).json();      // this request carries the crawl on
+  assert.equal(mid.status, 'running');
+  resumeStalled(true);
+  const fin = await waitFor(id, ['done']);
+  assert.equal(fin.pagesCrawled, 41);
+  const urls = site.pageRequests();
+  assert.ok(urls.length >= 41 && urls.length <= 43);              // at most the in-flight pages are fetched again
+});

@@ -1,9 +1,11 @@
 'use strict';
 const path = require('path');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 const express = require('express');
 const { Crawl } = require('./lib/crawler');
-const { parseUserUrl, preflight, UrlError } = require('./lib/safeUrl');
+const { parseUserUrl, preflight, UrlError, checkUrl, safeLookup } = require('./lib/safeUrl');
 const { exportCsv } = require('./lib/csv');
 const { queryList } = require('./lib/lists');
 const { createStore, pickDir } = require('./lib/store');
@@ -46,8 +48,76 @@ const store = createStore(pickDir());
 const live = new Map(); // crawls running inside THIS process
 setInterval(() => {
   try { store.evict(TTL_MS, MAX_STORED); } catch (e) { console.error('Cleanup failed:', e.message); }
-  for (const [ip, f] of failures) if (Date.now() > f.reset) failures.delete(ip);
 }, 60000).unref();
+
+function startCrawl(crawl) {
+  live.set(crawl.id, crawl);
+  crawl.run().catch(e => console.error(e)).finally(() => live.delete(crawl.id));
+  keepAwake();
+}
+
+// Hosts such as Hostinger/LiteSpeed stop or restart the Node process when it gets no requests for a while
+// (for example when the dashboard tab is closed or in the background), which used to kill a running crawl.
+// The crawl's queue is saved to disk every second, so whichever process handles the next request carries it on.
+let lastResumeCheck = 0;
+function resumeStalled(force = false) {
+  if (!force && Date.now() - lastResumeCheck < 2000) return;
+  lastResumeCheck = Date.now();
+  try {
+    for (const m of store.stalled()) {
+      if (live.has(m.id)) continue;
+      const claim = store.claim(m.id);
+      if (!claim) continue; // another process got there first
+      const saved = store.loadForResume(m.id);
+      if (!saved) continue;
+      const crawl = Crawl.restore(m.id, saved.meta, saved.state, saved.data, { ...app.locals.crawlOptions, store });
+      crawl.claim = claim;
+      console.log(`Carrying on crawl ${m.id} (${crawl.results.length} pages done, ${crawl.queue.length} queued)`);
+      startCrawl(crawl);
+    }
+  } catch (e) { console.error('Could not resume a crawl:', e.message); }
+}
+setInterval(resumeStalled, 5000).unref();
+app.use('/api', (req, res, next) => { rememberOrigin(req); resumeStalled(); next(); });
+
+// While a crawl runs, the server requests its own public address every 30 s so the host sees activity and
+// doesn't put the app to sleep. Set PUBLIC_URL (e.g. https://audit.example.com) to choose the address,
+// or KEEP_AWAKE=0 to turn this off. Without PUBLIC_URL the address the dashboard was opened on is used.
+let publicOrigin = '';
+function rememberOrigin(req) {
+  if (process.env.PUBLIC_URL || publicOrigin) return;
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const proto = String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')).split(',')[0].trim();
+  if (!/^[a-z0-9.-]+(:\d{1,5})?$/i.test(host) || !/^https?$/.test(proto)) return;
+  try { publicOrigin = checkUrl(proto + '://' + host).origin; } catch { /* local or private address: no need to keep awake */ }
+}
+let awakeTimer = null;
+function keepAwake() {
+  if (awakeTimer || process.env.KEEP_AWAKE === '0' || process.env.NODE_ENV === 'test') return;
+  awakeTimer = setInterval(() => {
+    if (!live.size) { clearInterval(awakeTimer); awakeTimer = null; return; }
+    let origin = publicOrigin;
+    if (process.env.PUBLIC_URL) { try { origin = new URL(process.env.PUBLIC_URL).origin; } catch { origin = ''; } }
+    if (!origin) return;
+    const u = new URL('/api/crawls/' + [...live.keys()][0], origin);
+    const req = (u.protocol === 'https:' ? https : http).get(u, { timeout: 10000, lookup: process.env.PUBLIC_URL ? undefined : safeLookup,
+      headers: { 'User-Agent': 'ModerniseSiteAuditor-keepalive' } }, r => r.resume());
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => { /* best effort */ });
+  }, 30000);
+  awakeTimer.unref();
+}
+
+// On a normal shutdown (deploy, host restart) save running crawls so the next process carries them on at once.
+let stopping = false;
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    if (stopping) return;
+    stopping = true;
+    for (const c of live.values()) c.pause();
+    process.exit(0);
+  });
+}
 
 function find(req, res, next) {
   const view = store.get(req.params.id);
@@ -80,8 +150,7 @@ app.post('/api/crawls', async (req, res, next) => {
     if (store.isBusy()) return res.status(409).json({ error: 'A crawl is already running.' });
     store.evict(TTL_MS, MAX_STORED - 1);
     const crawl = new Crawl(crypto.randomBytes(12).toString('hex'), u, limit, { ...app.locals.crawlOptions, store });
-    live.set(crawl.id, crawl);
-    crawl.run().catch(e => console.error(e)).finally(() => live.delete(crawl.id));
+    startCrawl(crawl);
     res.status(201).json(crawl.progress());
   } catch (e) { next(e); }
 });
@@ -156,5 +225,14 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 process.on('unhandledRejection', e => console.error('Unhandled rejection:', e));
-if (process.env.NODE_ENV !== 'test') app.listen(PORT, () => console.log(`Modernise Site Auditor listening on port ${PORT}`));
-module.exports = { app };
+// A bug must not lose a running audit: save it so the restarted process carries it on, then exit as Node normally would.
+process.on('uncaughtException', e => {
+  console.error('Uncaught exception:', e);
+  for (const c of live.values()) { try { c.pause(); } catch { /* ignore */ } }
+  process.exit(1);
+});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => console.log(`Modernise Site Auditor listening on port ${PORT}`));
+  setImmediate(() => resumeStalled(true)); // a crawl paused by the previous process carries on straight away
+}
+module.exports = { app, resumeStalled, live };
