@@ -50,7 +50,14 @@ UTF-8 with BOM and CRLF (opens correctly in Excel). Cells starting with `= + - @
 Hosts such as Hostinger/LiteSpeed can run several Node processes and restart them, so crawl results are saved to disk
 (`lib/store.js`), not kept in one process's memory. The process running a crawl appends results to `data/<id>/*.jsonl`
 and writes a heartbeat every second; any process can read them. Cancel works across processes (a flag file).
-If a process dies mid-crawl the crawl is shown as "interrupted" after ~20 s with the partial results.
+The crawl's queue is saved alongside the results, so if the host stops or restarts the process mid-crawl (Hostinger does this
+when the app gets no requests for a while, e.g. when the dashboard tab is closed), the next process that handles a request
+carries the crawl on from where it stopped, without crawling any page twice. On a normal shutdown (SIGTERM) it is saved and
+picked up at once; after a hard kill it is picked up once its heartbeat is ~20 s old. While a crawl runs the server also requests
+its own public address every 30 s so the host doesn't put it to sleep (`PUBLIC_URL` to set the address, `KEEP_AWAKE=0` to turn off).
+Only if a crawl can't be carried on (or has been restarted 30 times) is it shown as "interrupted" with the partial results.
+A page that times out, can't connect or returns 429/503 is tried once more after a short pause, and an unexpected error on one
+page is recorded on that page instead of ending the audit. `MAX_CRAWL_MINUTES` (default 20) counts crawling time only.
 Folder: `DATA_DIR` env var, default `./data`, falling back to the system temp folder if that is not writable.
 Full results are kept for `RESULT_TTL_MINUTES` (default 7 days) and for the latest `MAX_SAVED_CRAWLS` audits (default 10, max 50); older ones are deleted automatically.
 

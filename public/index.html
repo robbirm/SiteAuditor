@@ -462,11 +462,20 @@ function App(){
   },[]);
 
   const status=pr&&pr.status,active=!!status&&ACTIVE.includes(status),canReport=!!crawlId&&!!status&&!active&&pr.pagesCrawled>0;
-  useEffect(()=>{ // real progress: poll the backend while a crawl is running
-    if(!crawlId||!active)return;
-    let dead=false;
-    const t=setInterval(async()=>{try{const p=await api('/api/crawls/'+crawlId);if(!dead)setPr(p)}catch(e){if(!dead)setErr(e.message)}},1000);
-    return()=>{dead=true;clearInterval(t)};
+  useEffect(()=>{ // real progress: poll the backend while a crawl is running. The crawl itself runs on the server,
+    if(!crawlId||!active)return; // so leaving or hiding this page never stops it; we just catch up when the page is visible again.
+    let dead=false,t=null,fails=0;
+    const poll=async()=>{
+      clearTimeout(t);
+      try{const p=await api('/api/crawls/'+crawlId);if(dead)return;fails=0;setPr(p);setErr(e=>e&&/restarting|reach the backend|Request failed|not JSON/.test(e)?'':e)}
+      catch(e){if(dead)return;fails++;if(fails>=5)setErr(e.message)} // brief hiccups (e.g. the server restarting) are retried quietly
+      if(!dead)t=setTimeout(poll,document.hidden?5000:Math.min(10000,1000*Math.max(1,fails)));
+    };
+    const onShow=()=>{if(!document.hidden)poll()};
+    document.addEventListener('visibilitychange',onShow);
+    window.addEventListener('online',onShow);
+    t=setTimeout(poll,1000);
+    return()=>{dead=true;clearTimeout(t);document.removeEventListener('visibilitychange',onShow);window.removeEventListener('online',onShow)};
   },[crawlId,active]);
 
   const go=(v,i)=>{setView(v);setInit(i||null)};
@@ -505,7 +514,8 @@ function App(){
         h('button',{className:'btn p',disabled:active||backend!=='ok'||!url.trim(),onClick:start},active?'Auditing… '+pr.percent+'%':'Start Audit'),
         active?d('bar',h('i',{style:{width:pr.percent+'%'}})):null,
         active&&pr.phase?d('mut',{style:{width:'100%'}},pr.phase+'…'):null,
-        active?d('mut',{style:{width:'100%'}},'Crawled '+num(pr.pagesCrawled)+' pages · '+num(pr.discovered)+' URLs discovered · '+num(pr.queued)+' queued · limit '+num(pr.limit)):null),
+        active?d('mut',{style:{width:'100%'}},'Crawled '+num(pr.pagesCrawled)+' pages · '+num(pr.discovered)+' URLs discovered · '+num(pr.queued)+' queued · limit '+num(pr.limit)):null,
+        active?d('mut',{style:{width:'100%'}},'The audit runs on the server, so you can switch tabs or close this page and come back later.'):null),
       d('cards',stat('Pages crawled',h(AnimNum,{value:pr?pr.pagesCrawled:null}),null,'▤'),stat('Critical',h(AnimNum,{value:s?s.counts.critical:null}),'var(--red)','!'),stat('Warnings',h(AnimNum,{value:s?s.counts.warning:null}),'var(--amb)','▲'),stat('Broken links',h(AnimNum,{value:s?s.totals.brokenLinks:null}),'var(--red)','⛓'),stat('Health score',h(AnimNum,{value:s?s.score:null,suffix:'/100'}),scoreColor,'★')),
       d('view',{key:vk},view==='dash'&&h(Dashboard,{pr,crawlId,tick,go,onRow:setDetail}),
       view==='pages'&&h(ListPage,{...common,key:vk,section:'pages',ph:'Search URLs, titles, descriptions, headings…',sortable:true,cols:PAGES_COLS,
